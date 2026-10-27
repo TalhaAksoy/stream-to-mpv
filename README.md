@@ -1,55 +1,59 @@
+> **🇬🇧 English** | **[🇹🇷 Türkçe okumak için tıklayın (README.tr.md)](./README.tr.md)**
+
 # Stream to mpv
 
-**Tek sefer kur, videonun altındaki `mpv` butonuna bas, çözünürlüğü seç ve doğrudan `mpv` oynatıcısında izle.**
+**Install once, click the `▶ mpv` button inside any web video player, pick your resolution, and watch directly in `mpv`.**
 
-**Stream to mpv**, web sitelerinde (YouTube, Twitch, Türkçe anime/dizi izleme sitelerindeki `iframe` oynatıcılar vb.) oynatılan videoların gerçek medya akışlarını (**HLS `.m3u8` Master/Variant**, **`.mp4`**, **`.webm`** ve `yt-dlp` destekli akışlar) otomatik tespit eden ve video oynatıcısının **kontrol çubuğuna** yerleşen **`▶ mpv`** butonuyla videoyu harici **mpv** uygulamasında açan hafif, güvenli ve sıfır-bağımlılıklı bir sistemdir.
+**Stream to mpv** is a lightweight, zero-dependency Manifest V3 browser extension and native bridge that automatically detects real media streams (**HLS `.m3u8` Master/Variant**, **`.mp4`**, **`.webm`**, disguised `.txt` HLS manifests, and `yt-dlp` / YouTube streams) and injects an inline **`▶ mpv`** button with a **resolution selector** directly into the video player's bottom-right control bar.
 
-> **Önemli:** Bu proje bir video indirme aracı değildir. Yakalanan akış URL'si ve gerekli HTTP başlıkları (`Referer`, `Origin`, `User-Agent`) doğrudan `mpv` oynatıcısına iletilerek anlık **streaming** yapılır.
-
----
-
-## Özellikler
-
-- **Oynatıcı Kontrol Çubuğuna Entegre Buton:** YouTube, JWPlayer, Video.js, ArtPlayer, Plyr ve DPlayer gibi oynatıcılarda sağ alttaki ayar/altyazı/tam ekran butonlarının hemen yanına yerleşir. Özel kontrol çubuğu olmayan sitelerde sağ alt köşede şık bir yüzen buton olarak belirir.
-- **Çözünürlük Seçim Menüsü:** Butona tıkladığınızda videonun desteklediği çözünürlükleri (**4K 2160p, 2K 1440p, 1080p, 720p, 480p, 360p, Auto/Best** ve **Audio Only**) listeler; seçtiğiniz kalitede `mpv`'yi başlatır.
-- **Türkçe Anime & Dizi Siteleri (`iframe` Embed) Desteği:** Alucard, Tau Video, Vidmoly, Sibnet, Amani vb. `iframe` tabanlı oynatıcılardaki gizlenmiş HLS (`/hls/.../master.txt`), imzalı `.m3u8` ve çoklu `.mp4` akışlarını yakalar; `403 Forbidden` hatası almamak için `Referer` ve `User-Agent` başlıklarını `mpv`'ye aktarır.
-- **YouTube SABR `403` Koruması Uyumlu:** `mpv` + `yt-dlp` entegrasyonunda HLS (`m3u8`) öncelikli format seçimiyle YouTube videolarını kapanmadan yüksek kare hızında (60fps) oynatır.
-- **Sıfır Konfigürasyonlu Kurulum:** Eklenti ID'si kopyalama veya JSON dosyası düzenleme gerektirmez (`make` komutu her şeyi otomatik kurar ve doğrular).
+> **Note:** This project is **not** a video downloader. Detected stream URLs and required HTTP headers (`Referer`, `Origin`, `User-Agent`) are handed directly to your local `mpv` player for instant live **streaming**.
 
 ---
 
-## Gereksinimler (Requirements)
+## Features
 
-### 1. Bilgisayar (macOS — Apple Silicon & Intel)
+- **Inline Player Control Bar Button:** Integrates seamlessly next to the Settings / Subtitles / Fullscreen icons on YouTube, JWPlayer, Video.js, ArtPlayer, Plyr, and DPlayer. Falls back to a clean floating bottom-right control pill on custom players.
+- **Resolution Selector Menu:** Choose **4K (2160p), 2K (1440p), 1080p, 720p, 480p, 360p, Auto (Best Quality)**, or **Audio Only** right before launching `mpv`.
+- **Iframe & Anime/Movie Embed Support:** Captures disguised HLS playlists (e.g., `/hls/.../master.txt`), rotating signed `.m3u8` tokens, and multi-quality `.mp4` sources inside cross-origin `<iframe>` embeds (Alucard, Tau Video, Vidmoly, Sibnet, etc.) and forwards `Referer` + `Origin` + `User-Agent` to `mpv` on macOS to prevent `403 Forbidden` errors.
+- **YouTube SABR `403`-Safe Playback (macOS & Android):**
+  - On **macOS**, prioritizes HLS (`m3u8`) formats via `mpv` + `yt-dlp` for smooth 1080p60/4K playback without closing.
+  - On **Android**, extracts YouTube's direct HLS Master `.m3u8` stream in-browser so `mpv-android` plays video + audio directly without requiring `yt-dlp`.
+- **Zero-Configuration Setup:** No manual Extension ID copying or JSON editing — running `make` installs and verifies everything automatically.
 
-| Bileşen | Durum | Açıklama |
+---
+
+## Requirements
+
+### 1. Desktop (macOS — Apple Silicon & Intel)
+
+| Component | Status | Notes |
 | :--- | :--- | :--- |
-| **macOS** | Zorunlu | macOS 12+ (Apple Silicon M1/M2/M3/M4 veya Intel) |
-| **Tarayıcı** | Zorunlu | Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi, Arc veya Opera |
-| **Python 3** | Zorunlu | macOS üzerinde yerleşik gelir (`/usr/bin/python3` 3.9+ tam uyumludur) |
-| **Homebrew** | Önerilen | `mpv` ve `yt-dlp` paketlerini otomatik kurmak için (`https://brew.sh`) |
-| **mpv** | Zorunlu | `make` komutu eksikse Homebrew üzerinden otomatik kurar (`brew install mpv`) |
-| **yt-dlp** | Önerilen | YouTube/Twitch gibi MSE siteleri için (`make` eksikse otomatik kurar: `brew install yt-dlp`) |
-| **deno** *(İsteğe bağlı)* | Önerilen | Güncel `yt-dlp` sürümlerinin YouTube JS imzalarını hızlı çözmesi için (`brew install deno`) |
+| **macOS** | Required | macOS 12+ (Apple Silicon M1/M2/M3/M4 or Intel) |
+| **Browser** | Required | Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi, Arc, or Opera |
+| **Python 3** | Required | Pre-installed on macOS (`/usr/bin/python3` 3.9+ fully supported) |
+| **Homebrew** | Recommended | Used by `make` to auto-install `mpv` and `yt-dlp` (`https://brew.sh`) |
+| **mpv** | Required | Auto-installed via `make` if missing (`brew install mpv`) |
+| **yt-dlp** | Recommended | For YouTube/Twitch/MSE sites (`make` auto-installs `brew install yt-dlp`) |
+| **deno** *(Optional)* | Recommended | Speeds up `yt-dlp` YouTube JS challenge solving (`brew install deno`) |
 
-### 2. Android (Telefon / Tablet — Android 8.0+)
+### 2. Android (Phone / Tablet — Android 8.0+)
 
-| Bileşen | Durum | Açıklama |
+| Component | Status | Notes |
 | :--- | :--- | :--- |
-| **mpv-android** | Zorunlu | Paket adı: `is.xyz.mpv` (Google Play Store veya F-Droid / GitHub Releases üzerinden kurulmalı) |
-| **Eklenti Destekli Tarayıcı** | Zorunlu *(Tek Tık Buton İçin)* | **Bare Browser**, **Lemur Browser**, **Mises Browser** (Chromium MV3) veya **Firefox for Android** |
+| **mpv-android** | Required | Package ID: `is.xyz.mpv` (Install from Google Play Store, F-Droid, or GitHub Releases) |
+| **Extension-Capable Browser** | Required *(for on-video button)* | **Bare Browser**, **Lemur Browser**, **Mises Browser** (Chromium MV3), or **Firefox for Android** |
 
-> **Android Chrome Hakkında Önemli Not:** Google'ın standart **Chrome for Android** uygulaması masaüstü eklentilerini (`content_scripts` / `webRequest`) desteklemez. Video üzerinde tek tıklamalık **`mpv`** butonu deneyimi için yukarıdaki eklenti destekli Android tarayıcılarından birini kullanmalısınız. *(Standart Android Chrome'da yalnızca doğrudan `.m3u8`/`.mp4` linklerini paylaşarak açmak isterseniz `android/` klasöründeki yardımcı Kotlin uygulamasını kullanabilirsiniz).*
+> **Important Note on Chrome for Android:** Standard Google **Chrome for Android** does not support desktop extensions (`content_scripts` / `webRequest`). Use an extension-capable browser listed above for the one-tap on-video **`▶ mpv`** button. *(An optional Kotlin Share-Intent companion app is also included under `android/` for sharing direct `.m3u8`/`.mp4` URLs from standard browsers).*
 
 ---
 
-## Kurulum Rehberi
+## Installation Guide
 
-### A. macOS Kurulumu (2 Adımda Hazır)
+### A. macOS Setup (Ready in 2 Steps)
 
-#### 1. Adım: Arka Plan Köprüsünü ve Bağımlılıkları Kurun
+#### Step 1: Install the Native Bridge & Dependencies
 
-Projeyi indirin ve klasörün içinde terminali açıp sadece **`make`** yazın:
+Clone the repository and run **`make`**:
 
 ```bash
 git clone https://github.com/TalhaAksoy/stream-to-mpv.git
@@ -57,92 +61,93 @@ cd stream-to-mpv
 make
 ```
 
-> **Alternatif (Terminalsiz):** Klasör içindeki **`Install Stream to mpv.command`** veya **`dist/StreamToMpv-Installer.pkg`** dosyasına Finder'da çift tıklayarak da aynı kurulumu yapabilirsiniz.
+> **No-Terminal Alternative:** You can also double-click **`Install Stream to mpv.command`** or **`dist/StreamToMpv-Installer.pkg`** in Finder.
 
-`make` komutu şunları otomatik yapar:
-1. Sisteminizde `mpv` ve `yt-dlp` kurulu değilse Homebrew ile kurar.
-2. `~/mpv_host/mpv_host.py` dosyasını kurar.
-3. Chrome, Chromium, Brave, Edge, Vivaldi, Arc, Opera ve Firefox için Native Messaging izin kayıtlarını (Eklenti ID'si sormadan) otomatik oluşturur ve bağlantıyı test eder.
+Running `make` automatically:
+1. Installs `mpv` and `yt-dlp` via Homebrew if not already installed.
+2. Installs the native host script to `~/mpv_host/mpv_host.py`.
+3. Registers Native Messaging manifests across Chrome, Chromium, Brave, Edge, Vivaldi, Arc, Opera, and Firefox (without asking for an Extension ID) and verifies the handshake.
 
-#### 2. Adım: Eklentiyi Tarayıcıya Yükleyin
+#### Step 2: Load the Browser Extension
 
-1. Tarayıcınızı (örn. Google Chrome) açın ve adres çubuğuna **`chrome://extensions`** yazıp Enter'a basın.
-2. Sağ üst köşedeki **Geliştirici modu (Developer mode)** anahtarını açın.
-3. Sol üstteki **Paketlenmemiş öğe yükle (Load unpacked)** butonuna tıklayın.
-4. Proje klasörünün içindeki **`extension`** klasörünü seçin.
+1. Open your browser (e.g., Google Chrome) and navigate to **`chrome://extensions`**.
+2. Enable **Developer mode** in the top-right corner.
+3. Click **Load unpacked** in the top-left corner.
+4. Select the **`extension`** folder inside this repository.
 
-**Kurulum bitti!** Artık herhangi bir video açtığınızda sağ alt kontrol çubuğundaki **`▶ mpv`** butonuna tıklayıp istediğiniz çözünürlüğü seçebilirsiniz.
-
----
-
-### B. Android Kurulumu (Bare Browser / Lemur / Mises)
-
-1. Telefonunuza Google Play Store veya GitHub Releases üzerinden **[mpv-android](https://play.google.com/store/apps/details?id=is.xyz.mpv)** (`is.xyz.mpv`) uygulamasını yükleyin.
-2. Eklenti destekleyen bir Android tarayıcısı yükleyin (Önerilen: **Bare Browser**, **Lemur Browser** veya **Mises Browser**).
-3. Proje klasöründe **`make zip`** komutunu çalıştırın (veya hazır üretilmiş **`dist/stream-to-mpv-extension.zip`** dosyasını doğrudan telefonunuza gönderin):
-   ```bash
-   make zip
-   ```
-4. Telefondaki tarayıcının **Extensions (`chrome://extensions`)** menüsünü açın, **Developer mode** anahtarını etkinleştirin ve `stream-to-mpv-extension.zip` dosyasını (veya klasörünü) yükleyin.
-5. **Bare Browser Kullanıyorsanız Kritik Ayar:** Bare Browser varsayılan olarak tüm harici uygulama geçişlerini engeller (`Open links in apps = Never`). Tek dokunuşla `mpv-android` açılması için **Bare Browser → Settings → Open links in apps → `Always` (veya `Ask`)** seçeneğini etkinleştirin. *(Gizli sekmede veya bu ayarı açmadan kullanmak isterseniz menüdeki **`Share Stream to App…`** seçeneğine basıp Android paylaşım ekranından **Open with mpv** diyerek de açabilirsiniz).*
-6. **Mobilde YouTube Notu:** Doğrudan `.m3u8` / `.mp4` sunan siteler `mpv-android` içinde anında açılır. YouTube linklerini mobilde `mpv-android` ile açmak için `mpv-android` içinde `ytdl` desteğinin açık/destekli olması gerekir (aksi halde YouTube için NewPipe/PipePipe veya doğrudan HLS/MP4 siteleri tercih edilmelidir).
+**Done!** Open any video page, click **`▶ mpv`** on the bottom-right player controls, and select your desired resolution.
 
 ---
 
-## Kullanım İpuçları
+### B. Android Setup (Bare Browser / Lemur / Mises)
 
-- **Çözünürlük Seçimi:** Oynatıcının sağ altındaki **`▶ mpv`** butonuna tıklayın -> Açılan menüden **`1080p`**, **`720p`**, **`Auto (Best Quality)`** veya **`Audio Only`** seçeneğine tıklayın. Video tarayıcıda otomatik duraklatılır ve `mpv` penceresinde başlar.
-- **Anime / Dizi Sitelerinde Kullanım:** Çoğu Türkçe anime sitesinde video oynatıcısının üzerinde önce sahte bir kapak/reklam katmanı bulunur. Önce videonun ortasındaki Play tuşuna bir kez basıp gerçek videonun yüklenmesini sağlayın, ardından sağ alttaki **`▶ mpv`** butonuna tıklayın.
-- **Toolbar Popup Menüsü:** Tarayıcının sağ üstündeki eklenti ikonuna tıklayarak bağlantı durumunu (`mpv Ready`) görebilir veya isterseniz `Auto-open videos` (otomatik açma, varsayılan kapalıdır) özelliğini açıp kapatabilirsiniz.
-
----
-
-## Bilinen Sınırlar ve Güvenlik Notları
-
-1. **DRM Korumalı İçerikler (Netflix, Disney+, Spotify vb.):** Widevine / FairPlay şifreli içerikler yasal ve teknik olarak harici oynatıcılarda çözülemez; eklenti bu akışları tespit ettiğinde `Unsupported stream (DRM)` uyarısı gösterir.
-2. **Android Intent HTTP Başlık Kısıtı:** Resmi `mpv-android` (`is.xyz.mpv`) uygulaması, Android `ACTION_VIEW` Intent'leri üzerinden özel HTTP `Referer` veya `User-Agent` başlıklarını henüz okumamaktadır (`MPVActivity.kt` kaynak kodunda `TODO` durumundadır). Bu nedenle sıkı `Referer` kontrolü yapmayan doğrudan `.m3u8` ve `.mp4` akışları Android'de tek tıklamayla açılırken, sıkı `Referer` korumalı bazı embed sunucuları Android üzerinde `403` hatası verebilir (macOS üzerinde ise `Referer` + `Origin` + `User-Agent` tam desteklidir ve sorunsuz çalışır).
-3. **Tam Ekran (Fullscreen) Görünürlüğü:** YouTube, JWPlayer, Video.js, ArtPlayer gibi özel kapsayıcı kullanan tüm sitelerde tam ekranda buton görünür kalır. Yalnızca tarayıcının saf `<video>` etiketini doğrudan tam ekran yaptığı nadir sitelerde tarayıcı güvenlik mimarisi `<video>` içine harici buton çizilmesine izin vermez.
-4. **Gizlilik ve Güvenlik:** Eklenti çerezlerinizi (`Cookie`) veya `Authorization` başlıklarınızı izinsiz olarak harici süreçlere sızdırmaz. Native Host (`mpv_host.py`) yalnızca `http://` ve `https://` şemalarını kabul eder, `shell=False` ile çalışır ve çağrıyı yapan eklenti kimliğini (`allowed_origins`) doğrular.
+1. Install **[mpv-android](https://play.google.com/store/apps/details?id=is.xyz.mpv)** (`is.xyz.mpv`) on your phone.
+2. Install an extension-capable Android browser (Recommended: **Bare Browser**, **Lemur Browser**, or **Mises Browser**).
+3. Send the pre-built **`dist/stream-to-mpv-extension.zip`** archive to your phone *(or rebuild it anytime with `make zip`)*.
+4. Open **`chrome://extensions`** in your mobile browser, turn on **Developer mode**, and load `stream-to-mpv-extension.zip`.
+5. **Required Setting for Bare Browser:** Bare Browser blocks external app handoffs by default (`Open links in apps = Never`). Go to **Bare Browser → Settings → Open links in apps** and select **`Always`** (or **`Ask`**) for one-tap launching into `mpv-android`. *(If you are in Incognito mode or prefer keeping that setting off, tap **`Share Stream to App…`** inside the `mpv` menu and pick **Open with mpv** from the Android share sheet).*
 
 ---
 
-## Geliştirici Komutları ve Testler
+## Usage Tips
 
-Proje hiçbir harici JavaScript framework'ü veya bundler gerektirmez. Tüm birim, yaşam döngüsü, güvenlik ve gerçek `mpv` + `ffmpeg` anime HLS entegrasyon testlerini çalıştırmak için:
+- **Selecting Resolution:** Click **`▶ mpv`** on the bottom-right control bar -> pick **`1080p`**, **`720p`**, **`Auto (Best Quality)`**, or **`Audio Only`**. The browser video pauses automatically while `mpv` opens.
+- **Anime & Embed Sites:** Many embed players show a static poster/ad overlay before requesting the real `.m3u8` / `.mp4` manifest. Press Play once on the video so the stream loads, then click **`▶ mpv`**.
+- **Toolbar Popup:** Click the extension icon in the browser toolbar to check connection status (`mpv Ready` / `Android Ready`) or toggle `Auto-open videos` (off by default).
+
+---
+
+## Known Limitations & Security
+
+1. **DRM-Protected Streams (Netflix, Disney+, Spotify, etc.):** Widevine / FairPlay encrypted streams cannot be played in external players; the extension detects them and displays an `Unsupported stream (DRM)` notice.
+2. **Android Intent HTTP Header Limitation:** Official `mpv-android` (`is.xyz.mpv`) does not yet parse custom `Referer` or `User-Agent` headers from Android `ACTION_VIEW` Intents (`TODO` in upstream `MPVActivity.kt`). YouTube and standard `.m3u8` / `.mp4` servers (e.g., Sibnet, Tau, OK.ru, GDrive) play directly on Android, whereas strict `Referer`-locked embed CDNs (e.g., Alucard / Vidmoly) may return `403` on Android (all of them work seamlessly on macOS where full headers are passed).
+3. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and `--no-config` safety checks, rejects CRLF header injection, and validates caller `allowed_origins`.
+
+---
+
+## Developer Commands & Automated Tests
+
+Built with pure vanilla JavaScript (Manifest V3) and Python 3 — zero npm frameworks or bundlers required:
 
 ```bash
-# Kurulum ve bağlantı doğrulaması
+# Install dependencies, native host, browser manifests, and mobile zip
 make
 
-# Tüm otomatik test paketlerini çalıştır (Node.js + Python 3 + gerçek mpv/ffmpeg testi)
+# Run all unit, service-worker concurrency, security, and real mpv/ffmpeg E2E tests
 make test
 
-# Dağıtılabilir macOS kurulum paketini (dist/StreamToMpv-Installer.pkg) yeniden oluştur
+# Rebuild mobile extension zip (dist/stream-to-mpv-extension.zip)
+make zip
+
+# Rebuild macOS installer package (dist/StreamToMpv-Installer.pkg)
 make pkg
 ```
 
 ---
 
-## Proje Dizin Yapısı
+## Project Structure
 
 ```text
 .
-├── Makefile                        # Tek komutluk kurulum (make), doğrulama ve test yöneticisi
-├── Install Stream to mpv.command   # Finder'dan çift tıklamayla çalışan macOS kurulum betiği
+├── Makefile                        # One-command installer, verifier, test runner & packager
+├── Install Stream to mpv.command   # Double-clickable macOS Finder installer
+├── README.md                       # English documentation
+├── README.tr.md                    # Turkish documentation (Türkçe rehber)
 ├── dist/
-│   └── StreamToMpv-Installer.pkg   # Standart macOS kurulum paketi
-├── extension/                      # Tarayıcı eklentisi (Manifest V3, saf JS)
-│   ├── manifest.json               # Eklenti izinleri ve sabit ortak anahtar
-│   ├── content.js                  # Oynatıcı kontrol çubuğu butonu ve çözünürlük menüsü (Shadow DOM)
-│   ├── background.js               # webRequest akış yakalama, frameId eşleştirme ve Native Messaging
-│   ├── stream_utils.js             # HLS Master (#EXT-X-STREAM-INF) ayrıştırma ve akış önceliklendirme
-│   ├── popup.html                  # Sade durum ve ayar penceresi
-│   └── popup.js                    # Popup mantığı
+│   ├── StreamToMpv-Installer.pkg   # Distributable macOS installer package
+│   └── stream-to-mpv-extension.zip # Ready-to-load mobile extension archive
+├── extension/                      # Manifest V3 browser extension (vanilla JS)
+│   ├── manifest.json               # Permissions & deterministic public key
+│   ├── content.js                  # Inline control-bar button, resolution menu & Android YT HLS extractor
+│   ├── background.js               # webRequest capture, frame matching & Native Messaging / Intent bridge
+│   ├── stream_utils.js             # HLS Master (#EXT-X-STREAM-INF) parser & stream prioritization
+│   ├── popup.html                  # Compact status & settings popup
+│   └── popup.js                    # Popup controller
 ├── native/                         # macOS Native Messaging Host
-│   ├── mpv_host.py                 # Güvenli Python 3 mpv & yt-dlp başlatıcısı (com.talha.mpv)
-│   ├── install.sh                  # Tüm Chromium/Firefox tarayıcılarını otomatik yapılandıran betik
-│   ├── build_macos_pkg.sh          # .pkg paket üretici
-│   └── com.talha.mpv.json.example  # Örnek Native Messaging manifest şablonu
-├── android/                        # Standart Android Chrome için isteğe bağlı Share Intent Kotlin uygulaması
-└── tests/                          # Otomatik birim, yaşam döngüsü, güvenlik ve gerçek mpv E2E testleri
+│   ├── mpv_host.py                 # Hardened Python 3 mpv & yt-dlp launcher (com.talha.mpv)
+│   ├── install.sh                  # Zero-config multi-browser manifest installer
+│   ├── build_macos_pkg.sh          # macOS .pkg builder
+│   └── com.talha.mpv.json.example  # Example Native Messaging host manifest
+├── android/                        # Optional Kotlin Share-Intent companion app for standard Android browsers
+└── tests/                          # Unit, lifecycle, security & real mpv + strict-Referer HLS E2E tests
 ```
