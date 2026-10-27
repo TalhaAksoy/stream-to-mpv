@@ -45,6 +45,7 @@
       justify-content: center;
       position: relative;
       height: 100%;
+      flex-shrink: 0;
       vertical-align: top;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       z-index: 2147483646;
@@ -117,18 +118,23 @@
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
     }
 
-    .mpv-trigger:hover {
+    .mpv-trigger:hover:not(:disabled) {
       opacity: 1;
       background: rgba(255, 255, 255, 0.12);
     }
 
-    :host([data-mode="floating"]) .mpv-trigger:hover {
+    :host([data-mode="floating"]) .mpv-trigger:hover:not(:disabled) {
       background: rgba(142, 68, 173, 0.92);
       border-color: rgba(255, 255, 255, 0.45);
     }
 
-    .mpv-trigger:active {
+    .mpv-trigger:active:not(:disabled) {
       transform: scale(0.95);
+    }
+
+    .mpv-trigger:disabled {
+      opacity: 0.6;
+      cursor: default;
     }
 
     .mpv-icon {
@@ -151,15 +157,43 @@
       text-shadow: none;
     }
 
-    /* Çözünürlük Seçim Menüsü (ekran konumuna göre yukarı veya aşağı açılır) */
+    @media (max-width: 480px) {
+      :host([data-mode="inline"]) .mpv-trigger {
+        min-height: 28px;
+        padding: 0 5px;
+        gap: 3px;
+      }
+
+      :host([data-mode="inline"]) .mpv-icon {
+        width: 17px;
+        height: 17px;
+      }
+
+      :host([data-mode="inline"]) .mpv-badge {
+        font-size: 9.5px;
+        padding: 2px 4px;
+      }
+    }
+
+    /* Çözünürlük Seçim Menüsü (Top Layer Popover + 2D ekran sınırı korumalı) */
     .mpv-menu {
       pointer-events: auto;
-      position: absolute;
-      bottom: calc(100% + 10px);
-      right: 0;
-      min-width: 190px;
+      visibility: visible;
+      opacity: 1;
+      box-sizing: border-box;
+      position: fixed;
+      inset: auto;
+      margin: 0;
+      top: 8px;
+      left: 8px;
+      width: fit-content;
+      min-width: min(188px, calc(100vw - 16px));
+      max-width: min(268px, calc(100vw - 16px));
       max-height: min(65vh, 300px);
+      overflow-x: hidden;
       overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
       background: rgba(20, 22, 29, 0.96);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
@@ -167,18 +201,14 @@
       border-radius: 12px;
       padding: 6px;
       box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+      color: #f0f3f8;
       display: none;
       flex-direction: column;
       gap: 2px;
       z-index: 2147483647;
     }
 
-    .mpv-menu.open-down {
-      bottom: auto;
-      top: calc(100% + 10px);
-    }
-
-    .mpv-menu.open {
+    .mpv-menu:where(:popover-open, .open) {
       display: flex;
     }
 
@@ -192,6 +222,13 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+    }
+
+    .mpv-menu-items {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
     }
 
     .mpv-menu-divider {
@@ -219,11 +256,19 @@
       gap: 8px;
       text-align: left;
       width: 100%;
+      min-width: 0;
       transition: background 0.12s ease;
     }
 
     .mpv-item:hover {
       background: rgba(155, 89, 182, 0.35);
+    }
+
+    .mpv-item-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .mpv-item-tag {
@@ -238,11 +283,17 @@
 
     .mpv-toast {
       pointer-events: none;
-      position: absolute;
-      bottom: calc(100% + 10px);
-      right: 0;
+      visibility: visible;
+      opacity: 1;
+      box-sizing: border-box;
+      position: fixed;
+      inset: auto;
+      margin: 0;
+      top: 8px;
+      left: 8px;
+      width: fit-content;
+      max-width: min(280px, calc(100vw - 16px));
       white-space: nowrap;
-      max-width: 280px;
       overflow: hidden;
       text-overflow: ellipsis;
       padding: 6px 11px;
@@ -257,12 +308,7 @@
       z-index: 2147483647;
     }
 
-    .mpv-toast.open-down {
-      bottom: auto;
-      top: calc(100% + 10px);
-    }
-
-    .mpv-toast.show {
+    .mpv-toast:where(:popover-open, .show) {
       display: block;
     }
 
@@ -283,7 +329,7 @@
     sharedSheet.replaceSync(WIDGET_CSS);
   }
 
-  // Modern Web Guidance (`shadow-dom`): tek seferlik <template>
+  // Modern Web Guidance (`shadow-dom` & `viewport-aware-dropdowns`): tek seferlik <template> + Top Layer popover
   const widgetTemplate = document.createElement("template");
   widgetTemplate.innerHTML = `
     <div class="mpv-root">
@@ -293,13 +339,13 @@
         </svg>
         <span class="mpv-badge">mpv</span>
       </button>
-      <div class="mpv-menu" aria-label="Select mpv resolution">
+      <div class="mpv-menu" popover="manual" aria-label="Select mpv resolution">
         <div class="mpv-menu-header">
           <span>Open in mpv</span>
         </div>
         <div class="mpv-menu-items"></div>
       </div>
-      <div class="mpv-toast" role="status" aria-live="polite"></div>
+      <div class="mpv-toast" popover="manual" role="status" aria-live="polite"></div>
     </div>
   `;
 
@@ -357,21 +403,32 @@
       }
     }
 
-    // 2. Video.js / Plyr / JWPlayer / ArtPlayer / DPlayer gibi yaygın anime & dizi oynatıcılarının sağ alt kontrol barları
+    // 2. Video.js (.vjs-control-bar): sağ taraftaki ayar/altyazı/PiP/tam ekran ikonlarının önüne yerleş
     const vjsBar = video.closest(".video-js")?.querySelector(".vjs-control-bar");
     if (vjsBar) {
-      const fsToggle = vjsBar.querySelector(".vjs-fullscreen-control");
-      return { container: vjsBar, beforeNode: fsToggle || null };
+      const vjsAnchor =
+        vjsBar.querySelector(".vjs-subs-caps-button") ||
+        vjsBar.querySelector(".vjs-descriptions-button") ||
+        vjsBar.querySelector(".vjs-picture-in-picture-control") ||
+        vjsBar.querySelector(".vjs-fullscreen-control");
+      return { container: vjsBar, beforeNode: vjsAnchor || null };
     }
 
+    // 3. JWPlayer / FirePlayer (.jw-button-container): spacer'dan sonraki sağ kontrol grubunun önüne yerleş
     const jwRight = video
       .closest(".jwplayer")
       ?.querySelector(".jw-button-container");
     if (jwRight) {
-      const jwFs = jwRight.querySelector(".jw-icon-fullscreen");
-      return { container: jwRight, beforeNode: jwFs || null };
+      const jwAnchor =
+        jwRight.querySelector(".jw-icon-cc") ||
+        jwRight.querySelector(".jw-settings-submenu-button") ||
+        jwRight.querySelector(".jw-icon-settings") ||
+        jwRight.querySelector(".jw-icon-pip") ||
+        jwRight.querySelector(".jw-icon-fullscreen");
+      return { container: jwRight, beforeNode: jwAnchor || null };
     }
 
+    // 4. ArtPlayer (.art-controls-right)
     const artRight = video
       .closest(".art-video-player")
       ?.querySelector(".art-controls-right");
@@ -379,6 +436,7 @@
       return { container: artRight, insertFirst: true };
     }
 
+    // 5. DPlayer (.dplayer-icons-right)
     const dplayerRight = video
       .closest(".dplayer")
       ?.querySelector(".dplayer-icons-right");
@@ -386,9 +444,15 @@
       return { container: dplayerRight, insertFirst: true };
     }
 
+    // 6. Plyr (.plyr__controls): sağdaki altyazı/ayar/PiP/tam ekran butonlarının önüne yerleş
     const plyrControls = video.closest(".plyr")?.querySelector(".plyr__controls");
     if (plyrControls) {
-      return { container: plyrControls, insertFirst: false };
+      const plyrAnchor =
+        plyrControls.querySelector("[data-plyr='captions']") ||
+        plyrControls.querySelector("[data-plyr='settings']") ||
+        plyrControls.querySelector("[data-plyr='pip']") ||
+        plyrControls.querySelector("[data-plyr='fullscreen']");
+      return { container: plyrControls, beforeNode: plyrAnchor || null };
     }
 
     return null;
@@ -616,6 +680,145 @@
     const menuItemsEl = shadow.querySelector(".mpv-menu-items");
     const toastEl = shadow.querySelector(".mpv-toast");
 
+    const supportsPopover =
+      typeof HTMLElement !== "undefined" &&
+      "popover" in HTMLElement.prototype &&
+      typeof menuEl.showPopover === "function";
+
+    function showPopoverSafe(el) {
+      if (!supportsPopover || !el.isConnected) return;
+      try {
+        el.showPopover();
+      } catch {
+        // Zaten açıksa veya desteklenmiyorsa yoksay
+      }
+    }
+
+    function hidePopoverSafe(el) {
+      if (!supportsPopover) return;
+      try {
+        el.hidePopover();
+      } catch {
+        // Zaten kapalıysa yoksay
+      }
+    }
+
+    function getViewportSize() {
+      const docEl = document.documentElement;
+      const vw =
+        document.compatMode === "CSS1Compat" && docEl?.clientWidth
+          ? Math.min(window.innerWidth || docEl.clientWidth, docEl.clientWidth)
+          : window.innerWidth || docEl?.clientWidth || 360;
+      const vh = window.innerHeight || docEl?.clientHeight || 240;
+      return {
+        vw: Math.max(120, vw),
+        vh: Math.max(80, vh)
+      };
+    }
+
+    /**
+     * Menü veya bildirim kutusunu butonun konumuna göre hizalar;
+     * sol, sağ, üst ve alt ekran/iframe sınırlarından taşmasını otomatik engeller.
+     */
+    function positionOverlayPanel(panelEl) {
+      const EDGE_PAD = 8;
+      const GAP = 8;
+      const { vw, vh } = getViewportSize();
+      const btnRect = triggerBtn.getBoundingClientRect();
+
+      const hasValidBtnRect = btnRect.width > 0 && btnRect.height > 0;
+      const videoRect = video.getBoundingClientRect();
+      const anchorRect = hasValidBtnRect
+        ? btnRect
+        : {
+            left: Math.max(EDGE_PAD, Math.min(vw - 72, videoRect.right - 80)),
+            right: Math.max(80, Math.min(vw - EDGE_PAD, videoRect.right - 12)),
+            top: Math.max(EDGE_PAD, Math.min(vh - 40, videoRect.bottom - 44)),
+            bottom: Math.max(40, Math.min(vh - EDGE_PAD, videoRect.bottom - 10)),
+            width: 68,
+            height: 34
+          };
+
+      const maxW = Math.max(120, vw - EDGE_PAD * 2);
+      panelEl.style.maxWidth = `${maxW}px`;
+
+      const spaceAbove = anchorRect.top - GAP - EDGE_PAD;
+      const spaceBelow = vh - anchorRect.bottom - GAP - EDGE_PAD;
+      const openDown = spaceAbove < 180 && spaceBelow > spaceAbove;
+
+      if (panelEl === menuEl) {
+        const directionalSpace = openDown ? spaceBelow : spaceAbove;
+        const allowedHeight =
+          directionalSpace >= 108
+            ? Math.min(300, Math.floor(directionalSpace))
+            : Math.max(84, Math.min(300, vh - EDGE_PAD * 2));
+        panelEl.style.maxHeight = `${allowedHeight}px`;
+      }
+
+      // Doğal genişlik ve yüksekliği ölçmek için geçici olarak başlangıç noktasına al
+      panelEl.style.left = `${EDGE_PAD}px`;
+      panelEl.style.top = `${EDGE_PAD}px`;
+
+      const panelRect = panelEl.getBoundingClientRect();
+      const panelW = panelRect.width || Math.min(200, maxW);
+      const panelH = panelRect.height || 40;
+
+      // Buton ekranın sol yarısındaysa sola, sağ yarısındaysa sağa hizala; ardından [8px, vw - 8px] aralığına sıkıştır
+      const anchorCenterX = anchorRect.left + anchorRect.width / 2;
+      const preferredLeft =
+        anchorCenterX < vw / 2 ? anchorRect.left : anchorRect.right - panelW;
+      const maxLeft = Math.max(EDGE_PAD, vw - panelW - EDGE_PAD);
+      const finalLeft = Math.min(Math.max(preferredLeft, EDGE_PAD), maxLeft);
+
+      // Yukarı veya aşağı aç; [8px, vh - 8px] aralığına sıkıştır
+      const preferredTop = openDown
+        ? anchorRect.bottom + GAP
+        : anchorRect.top - GAP - panelH;
+      const maxTop = Math.max(EDGE_PAD, vh - panelH - EDGE_PAD);
+      const finalTop = Math.min(Math.max(preferredTop, EDGE_PAD), maxTop);
+
+      panelEl.style.left = `${Math.round(finalLeft)}px`;
+      panelEl.style.top = `${Math.round(finalTop)}px`;
+
+      // Top Layer Popover desteklemeyen eski tarayıcılarda üst kapsayıcı transform sapmasını telafi et
+      const verifyRect = panelEl.getBoundingClientRect();
+      const dx = verifyRect.left - Math.round(finalLeft);
+      const dy = verifyRect.top - Math.round(finalTop);
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        panelEl.style.left = `${Math.round(finalLeft - dx)}px`;
+        panelEl.style.top = `${Math.round(finalTop - dy)}px`;
+      }
+    }
+
+    function openMenu() {
+      menuEl.classList.add("open");
+      rootEl.classList.add("menu-open", "visible");
+      showPopoverSafe(menuEl);
+      positionOverlayPanel(menuEl);
+    }
+
+    function closeMenu() {
+      menuEl.classList.remove("open");
+      rootEl.classList.remove("menu-open");
+      hidePopoverSafe(menuEl);
+    }
+
+    function hideToast() {
+      toastEl.className = "mpv-toast";
+      hidePopoverSafe(toastEl);
+    }
+
+    function repositionOpenPanels() {
+      if (menuEl.classList.contains("open")) {
+        showPopoverSafe(menuEl);
+        positionOverlayPanel(menuEl);
+      }
+      if (toastEl.classList.contains("show")) {
+        showPopoverSafe(toastEl);
+        positionOverlayPanel(toastEl);
+      }
+    }
+
     const meta = {
       video,
       host,
@@ -627,34 +830,22 @@
       toastEl,
       mode: "floating",
       lastActivityAt: Date.now(),
-      toastTimer: null
+      toastTimer: null,
+      closeMenu,
+      repositionOpenPanels
     };
-
-    function updateDropdownDirection() {
-      const btnRect = triggerBtn.getBoundingClientRect();
-      const spaceAbove = btnRect.top;
-      const spaceBelow = window.innerHeight - btnRect.bottom;
-      const shouldOpenDown = spaceAbove < 240 && spaceBelow > spaceAbove;
-      menuEl.classList.toggle("open-down", shouldOpenDown);
-      toastEl.classList.toggle("open-down", shouldOpenDown);
-    }
-
-    function closeMenu() {
-      menuEl.classList.remove("open");
-      rootEl.classList.remove("menu-open");
-    }
 
     function showToast(text, kind = "info", durationMs = 3000) {
       if (meta.toastTimer) clearTimeout(meta.toastTimer);
       closeMenu();
-      updateDropdownDirection();
-      const downClass = toastEl.classList.contains("open-down") ? " open-down" : "";
       toastEl.textContent = text;
-      toastEl.className = `mpv-toast show ${kind}${downClass}`;
+      toastEl.className = `mpv-toast show ${kind}`;
       rootEl.classList.add("visible");
+      showPopoverSafe(toastEl);
+      positionOverlayPanel(toastEl);
 
       meta.toastTimer = setTimeout(() => {
-        toastEl.className = "mpv-toast";
+        hideToast();
       }, durationMs);
     }
 
@@ -734,6 +925,7 @@
 
     function appendOptionLabels(containerEl, label, tag) {
       const nameSpan = document.createElement("span");
+      nameSpan.className = "mpv-item-label";
       nameSpan.textContent = label;
       containerEl.appendChild(nameSpan);
 
@@ -835,7 +1027,7 @@
         return;
       }
 
-      toastEl.className = "mpv-toast";
+      hideToast();
 
       // Arka plandan bu videonun mevcut çözünürlüklerini ve (Android ise) hazır intent:// linklerini sorgula
       let heights = [2160, 1440, 1080, 720, 480, 360];
@@ -901,9 +1093,7 @@
       }
 
       renderResolutionItems(heights, mode, isAndroid, androidIntents, streamUrls);
-      updateDropdownDirection();
-      menuEl.classList.add("open");
-      rootEl.classList.add("menu-open", "visible");
+      openMenu();
     });
 
     // Oynatıcının kendi tıklama/dokunma/kısayol olaylarının tetiklenmesini engelle
@@ -921,7 +1111,7 @@
       });
     }
 
-    // Dışarıya tıklandığında menüyü kapat
+    // Dışarıya tıklandığında veya Escape tuşuna basıldığında menüyü kapat
     document.addEventListener(
       "click",
       (ev) => {
@@ -932,6 +1122,16 @@
         }
       },
       { capture: true, passive: true }
+    );
+
+    document.addEventListener(
+      "keydown",
+      (ev) => {
+        if (ev.key === "Escape" && menuEl.classList.contains("open")) {
+          closeMenu();
+        }
+      },
+      { passive: true }
     );
 
     const markActivity = () => {
@@ -956,9 +1156,10 @@
    * yoksa videonun sağ alt kontrol hizasına (floating) yerleştirir.
    */
   function updateWidgetPlacement(meta) {
-    const { video, host, rootEl } = meta;
+    const { video, host, rootEl, menuEl } = meta;
 
     if (!video.isConnected) {
+      meta.closeMenu();
       host.remove();
       trackedVideos.delete(video);
       return;
@@ -972,24 +1173,53 @@
       rootEl.style.right = "";
       rootEl.style.top = "";
 
-      if (host.parentNode !== inlineBar.container) {
-        if (inlineBar.insertFirst && inlineBar.container.firstChild) {
+      // Menü açıkken DOM ebeveynini taşıma (Top Layer popover'ın kapanmasını önler), sadece konumu güncelle
+      if (menuEl.classList.contains("open") && host.parentNode === inlineBar.container) {
+        meta.repositionOpenPanels();
+        return;
+      }
+
+      const targetBefore =
+        inlineBar.beforeNode && inlineBar.beforeNode.parentNode === inlineBar.container
+          ? inlineBar.beforeNode
+          : null;
+
+      if (targetBefore) {
+        const targetOrder = window.getComputedStyle(targetBefore).order;
+        host.style.order = targetOrder && targetOrder !== "0" ? targetOrder : "";
+        if (host.parentNode !== inlineBar.container || host.nextElementSibling !== targetBefore) {
+          inlineBar.container.insertBefore(host, targetBefore);
+        }
+      } else if (inlineBar.insertFirst) {
+        host.style.order = "";
+        if (host.parentNode !== inlineBar.container || inlineBar.container.firstElementChild !== host) {
           inlineBar.container.insertBefore(host, inlineBar.container.firstChild);
-        } else if (inlineBar.beforeNode && inlineBar.beforeNode.parentNode === inlineBar.container) {
-          inlineBar.container.insertBefore(host, inlineBar.beforeNode);
-        } else {
+        }
+      } else {
+        const lastEl = inlineBar.container.lastElementChild;
+        if (lastEl && lastEl !== host) {
+          const lastOrder = window.getComputedStyle(lastEl).order;
+          host.style.order = lastOrder && lastOrder !== "0" ? lastOrder : "";
+        }
+        if (host.parentNode !== inlineBar.container || inlineBar.container.lastElementChild !== host) {
           inlineBar.container.appendChild(host);
         }
       }
+
+      meta.repositionOpenPanels();
       return;
     }
 
     // Özel kontrol barı bulunamadıysa: sağ alt kontrol çubuğu hizasında (floating) göster
     meta.mode = "floating";
     host.setAttribute("data-mode", "floating");
+    host.style.order = "";
 
     const desiredRoot = getFloatingMountRoot(video);
     if (desiredRoot && host.parentNode !== desiredRoot) {
+      if (menuEl.classList.contains("open")) {
+        meta.closeMenu();
+      }
       desiredRoot.appendChild(host);
     }
 
@@ -1003,6 +1233,9 @@
 
     if (!eligible || !inViewport) {
       rootEl.classList.remove("visible");
+      if (menuEl.classList.contains("open")) {
+        meta.closeMenu();
+      }
       return;
     }
 
@@ -1013,6 +1246,7 @@
     rootEl.style.bottom = `${bottomOffset}px`;
     rootEl.style.right = `${rightOffset}px`;
     rootEl.classList.add("visible");
+    meta.repositionOpenPanels();
   }
 
   let rafScheduled = false;
@@ -1026,6 +1260,14 @@
         if (meta) updateWidgetPlacement(meta);
       }
     });
+  }
+
+  function handleFullscreenChange() {
+    for (const video of trackedVideos) {
+      const meta = videoRegistry.get(video);
+      if (meta) meta.closeMenu();
+    }
+    scheduleLayoutUpdate();
   }
 
   function scanForVideos(root = document) {
@@ -1060,8 +1302,8 @@
 
   window.addEventListener("scroll", scheduleLayoutUpdate, { passive: true, capture: true });
   window.addEventListener("resize", scheduleLayoutUpdate, { passive: true });
-  document.addEventListener("fullscreenchange", scheduleLayoutUpdate, { passive: true });
-  document.addEventListener("webkitfullscreenchange", scheduleLayoutUpdate, { passive: true });
+  document.addEventListener("fullscreenchange", handleFullscreenChange, { passive: true });
+  document.addEventListener("webkitfullscreenchange", handleFullscreenChange, { passive: true });
 
   setInterval(scheduleLayoutUpdate, 1200);
 })();

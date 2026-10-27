@@ -48,6 +48,7 @@ test:
 	@node ./tests/test_background_lifecycle.mjs
 	@python3 ./tests/test_native_host.py
 	@python3 ./tests/test_anime_embed_e2e.py
+	@python3 ./tests/test_overlay_positioning.py
 
 pkg:
 	@chmod +x ./native/build_macos_pkg.sh
