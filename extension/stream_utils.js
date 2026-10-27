@@ -22,7 +22,8 @@ export const DEFAULT_BLOCKED_DOMAINS = [
   "teads.tv",
   "spotxchange.com",
   "springserve.com",
-  "freewheel.tv"
+  "freewheel.tv",
+  "mradx.net"
 ];
 
 // Bağımsız oynatılabilir akış olarak listelenmeyecek video/ses segment uzantıları
@@ -151,20 +152,49 @@ export function isMediaSegment(rawUrl, contentType = "") {
       }
     }
 
-    // MIME türü segment ise (video/mp2t genellikle .ts segmentleridir)
-    const lowerMime = (contentType || "").toLowerCase().split(";")[0].trim();
-    if (lowerMime === "video/mp2t" || lowerMime === "video/iso.segment") {
+    // fMP4 / WebM başlatma (initialization) parçaları tek başına oynatılamaz (örn. Mail.ru vinit.mp4 / ainit.mp4)
+    if (/(?:^|\/)[va]?init(?:[-_][^/]*)?\.(?:mp4|m4s|webm|cmfv|cmfa)$/i.test(lowerPath)) {
       return true;
     }
 
-    // Byte-range veya parça parametreleri içeren segment istekleri (örn: byterange, frag, seg)
+    // MIME türü segment veya yalnızca MSE ayrık ses izi ise (video/mp2t, video/iso.segment, audio/mp4, audio/webm)
+    const lowerMime = (contentType || "").toLowerCase().split(";")[0].trim();
+    if (
+      lowerMime === "video/mp2t" ||
+      lowerMime === "video/iso.segment" ||
+      lowerMime === "audio/mp4" ||
+      lowerMime === "audio/webm"
+    ) {
+      return true;
+    }
+
+    // Byte-range veya parça parametreleri içeren MSE segment istekleri (örn: byterange, bytes=0-..., range=0-...)
+    const rangeParam = parsed.searchParams.get("range") || "";
     if (
       parsed.searchParams.has("byterange") ||
+      parsed.searchParams.has("bytes") ||
+      /^(?:bytes=)?\d+-\d*$/i.test(rangeParam) ||
       /\/seg-\d+-/.test(lowerPath) ||
       /\/chunk-\d+\.(m4s|ts|mp4)$/i.test(lowerPath) ||
       /\/fragment-\d+/i.test(lowerPath)
     ) {
       return true;
+    }
+
+    // VK / OK.ru CDN'lerinde (vkuser.net / okcdn.ru) DASH ayrık iz parçaları (ct=1/4/6 veya video/webm);
+    // ct=0 (tam MP4) ve .m3u8 / ct=8 (HLS) akışlarına izin verilir.
+    const lowerHost = parsed.hostname.toLowerCase();
+    if (
+      (lowerHost.endsWith(".vkuser.net") || lowerHost.endsWith(".okcdn.ru")) &&
+      !lowerPath.includes(".m3u8")
+    ) {
+      const ctParam = parsed.searchParams.get("ct");
+      if (
+        lowerMime === "video/webm" ||
+        (ctParam !== null && ctParam !== "0" && ctParam !== "8")
+      ) {
+        return true;
+      }
     }
 
     return false;
@@ -564,12 +594,16 @@ export function matchStreamForVideoContext(streams, videoContext = {}) {
     };
   }
 
-  // 2. Video elementinin doğrudan HTTP src/currentSrc adresi varsa ağ kayıtlarıyla tam veya dedupeKey eşleşmesi ara
+  // 2. Video elementinin doğrudan HTTP src/currentSrc adresi varsa ağ kayıtlarıyla tam, dedupeKey veya 302 yönlendirme öncesi alias eşleşmesi ara
   if (directHttpDomUrls.length > 0) {
     for (const domUrl of directHttpDomUrls) {
       const domDedupe = computeDedupeKey(domUrl);
       const exactMatch = playablePool.find(
-        (s) => s.url === domUrl || s.dedupeKey === domDedupe
+        (s) =>
+          s.url === domUrl ||
+          s.dedupeKey === domDedupe ||
+          (Array.isArray(s.aliasUrls) &&
+            (s.aliasUrls.includes(domUrl) || s.aliasUrls.includes(domDedupe)))
       );
       if (exactMatch) {
         return { stream: exactMatch, reason: "MATCHED_DOM_URL" };

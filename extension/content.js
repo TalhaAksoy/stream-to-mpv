@@ -611,28 +611,412 @@
     return null;
   }
 
-  // Toolbar popup üzerinden YouTube sekmesi sorgulandığında Android için doğrudan HLS çıkar
+  function isValidStreamHttpUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== "string") return false;
+    try {
+      const u = new URL(rawUrl);
+      return u.protocol === "http:" || u.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Popüler dizi/film/anime embed oynatıcılarını (OK.ru, Mail.ru, VK, Sibnet) alan adına göre tanır.
+   */
+  function detectEmbedProvider(rawUrl) {
+    try {
+      const u = new URL(rawUrl);
+      const host = u.hostname.toLowerCase();
+      const path = u.pathname.toLowerCase();
+
+      if (
+        host === "ok.ru" ||
+        host.endsWith(".ok.ru") ||
+        host === "odnoklassniki.ru" ||
+        host.endsWith(".odnoklassniki.ru")
+      ) {
+        return "okru";
+      }
+
+      if (
+        host === "my.mail.ru" ||
+        host.endsWith(".my.mail.ru") ||
+        ((host === "mail.ru" || host.endsWith(".mail.ru")) && path.includes("/video/"))
+      ) {
+        return "mailru";
+      }
+
+      if (
+        host === "vk.com" ||
+        host.endsWith(".vk.com") ||
+        host === "vk.ru" ||
+        host.endsWith(".vk.ru") ||
+        host === "vkvideo.ru" ||
+        host.endsWith(".vkvideo.ru")
+      ) {
+        return "vk";
+      }
+
+      if (host === "sibnet.ru" || host.endsWith(".sibnet.ru")) {
+        return "sibnet";
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function parseOkRuDom() {
+    const qualityMap = {
+      mobile: 144,
+      lowest: 240,
+      low: 360,
+      sd: 480,
+      hd: 720,
+      full: 1080,
+      quad: 1440,
+      ultra: 2160
+    };
+
+    const nodes = document.querySelectorAll(
+      '[data-module="OKVideo"][data-options], [data-options*="flashvars"], [data-options*="metadata"]'
+    );
+    for (const node of nodes) {
+      try {
+        const rawOpts = node.getAttribute("data-options");
+        if (!rawOpts) continue;
+        const opts = JSON.parse(rawOpts);
+        const rawMeta = opts?.flashvars?.metadata;
+        const meta = typeof rawMeta === "string" ? JSON.parse(rawMeta) : rawMeta;
+        if (!meta || typeof meta !== "object") continue;
+
+        const variantsByHeight = {};
+        if (Array.isArray(meta.videos)) {
+          for (const item of meta.videos) {
+            if (!item || item.disallowed || !item.url) continue;
+            const h = qualityMap[String(item.name || "").toLowerCase()];
+            if (!h) continue;
+            try {
+              const resolved = new URL(item.url, window.location.href).href;
+              if (isValidStreamHttpUrl(resolved)) {
+                variantsByHeight[h] = resolved;
+              }
+            } catch {
+              // Geçersiz URL'yi atla
+            }
+          }
+        }
+
+        const rawHls =
+          meta.hlsManifestUrl || meta.ondemandHls || meta.hlsMasterPlaylistUrl || "";
+        let hlsUrl = "";
+        if (rawHls) {
+          try {
+            const resolvedHls = new URL(rawHls, window.location.href).href;
+            if (isValidStreamHttpUrl(resolvedHls)) hlsUrl = resolvedHls;
+          } catch {
+            // Yoksay
+          }
+        }
+
+        const sortedHeights = Object.keys(variantsByHeight)
+          .map((k) => parseInt(k, 10))
+          .sort((a, b) => b - a);
+        const bestMp4 = sortedHeights.length > 0 ? variantsByHeight[sortedHeights[0]] : "";
+        const streamUrl = hlsUrl || bestMp4;
+        if (!streamUrl) continue;
+
+        return {
+          provider: "okru",
+          streamUrl,
+          format: hlsUrl ? "HLS" : "MP4",
+          variantsByHeight,
+          title: meta.movie?.title || document.title || ""
+        };
+      } catch {
+        // Sonraki düğümü dene
+      }
+    }
+    return null;
+  }
+
+  function unescapeInlineJsonUrl(rawStr) {
+    if (!rawStr || typeof rawStr !== "string") return "";
+    return rawStr
+      .replace(/\\\//g, "/")
+      .replace(/\\u0026/gi, "&")
+      .replace(/&amp;/gi, "&")
+      .trim();
+  }
+
+  function parseVkDom() {
+    const variantsByHeight = {};
+    let hlsUrl = "";
+
+    for (const script of document.scripts) {
+      const text = script.textContent || "";
+      if (
+        !text.includes("vkuser.net") &&
+        !text.includes("okcdn.ru") &&
+        !text.includes('"hls"') &&
+        !text.includes('"mp4_')
+      ) {
+        continue;
+      }
+
+      const mp4Regex = /"(?:mp4_|url|cache)(144|240|360|480|720|1080|1440|2160)"\s*:\s*"(https?:[^"]+)"/g;
+      for (const match of text.matchAll(mp4Regex)) {
+        const h = parseInt(match[1], 10);
+        const cleaned = unescapeInlineJsonUrl(match[2]);
+        if (h > 0 && isValidStreamHttpUrl(cleaned) && !variantsByHeight[h]) {
+          variantsByHeight[h] = cleaned;
+        }
+      }
+
+      if (!hlsUrl) {
+        const hlsMatch = text.match(/"(?:hls|hls_ondemand|hls_live)"\s*:\s*"(https?:[^"]+)"/);
+        if (hlsMatch) {
+          const cleanedHls = unescapeInlineJsonUrl(hlsMatch[1]);
+          if (isValidStreamHttpUrl(cleanedHls)) {
+            hlsUrl = cleanedHls;
+          }
+        }
+      }
+    }
+
+    const sortedHeights = Object.keys(variantsByHeight)
+      .map((k) => parseInt(k, 10))
+      .sort((a, b) => b - a);
+    const bestMp4 = sortedHeights.length > 0 ? variantsByHeight[sortedHeights[0]] : "";
+    const streamUrl = hlsUrl || bestMp4;
+    if (!streamUrl) return null;
+
+    return {
+      provider: "vk",
+      streamUrl,
+      format: hlsUrl ? "HLS" : "MP4",
+      variantsByHeight,
+      title: document.title || ""
+    };
+  }
+
+  async function extractMailRuStream() {
+    let metaUrl = "";
+    const cfgEl = document.querySelector(".sp-video__page-config");
+    if (cfgEl?.textContent) {
+      try {
+        const cfg = JSON.parse(cfgEl.textContent);
+        if (cfg?.metaUrl && typeof cfg.metaUrl === "string") {
+          metaUrl = cfg.metaUrl;
+        }
+      } catch {
+        // Yoksay
+      }
+    }
+
+    if (!metaUrl) {
+      const embedMatch = window.location.pathname.match(/\/video\/embed\/(\d+)/i);
+      if (embedMatch) {
+        metaUrl = `/+/video/meta/${embedMatch[1]}`;
+      }
+    }
+
+    if (!metaUrl) {
+      const htmlText = document.documentElement?.innerHTML || "";
+      const inlineMeta =
+        htmlText.match(/["']((?:https?:\/\/[^"']+)?\/\+\/video\/meta\/[^"'\s<>]+)["']/i) ||
+        htmlText.match(/(\/\+\/video\/meta\/\d+)/i);
+      if (inlineMeta?.[1]) {
+        metaUrl = unescapeInlineJsonUrl(inlineMeta[1]);
+      }
+    }
+
+    if (!metaUrl) return null;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const endpoint = new URL(metaUrl, window.location.href).href;
+      const res = await fetch(endpoint, {
+        credentials: "include",
+        signal: controller.signal
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const variantsByHeight = {};
+      if (Array.isArray(data?.videos)) {
+        for (const item of data.videos) {
+          if (!item?.url) continue;
+          const h = parseInt(String(item.key || ""), 10);
+          const resolved = new URL(item.url, window.location.href).href;
+          if (!Number.isNaN(h) && h > 0 && isValidStreamHttpUrl(resolved)) {
+            variantsByHeight[h] = resolved;
+          }
+        }
+      }
+
+      const sortedHeights = Object.keys(variantsByHeight)
+        .map((k) => parseInt(k, 10))
+        .sort((a, b) => b - a);
+      if (sortedHeights.length === 0) return null;
+
+      return {
+        provider: "mailru",
+        streamUrl: variantsByHeight[sortedHeights[0]],
+        format: "MP4",
+        variantsByHeight,
+        title: data?.meta?.title || document.title || ""
+      };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function extractSibnetStream() {
+    let candidateSrc = "";
+
+    for (const v of document.querySelectorAll("video")) {
+      const srcs = [
+        v.currentSrc || "",
+        v.src || "",
+        ...Array.from(v.querySelectorAll("source"), (s) => s.src || "")
+      ];
+      for (const s of srcs) {
+        if (s && !s.startsWith("blob:") && !s.startsWith("data:") && isValidStreamHttpUrl(s)) {
+          candidateSrc = s;
+          if (/\/\/dv\d*\.sibnet\.ru\//i.test(s)) break;
+        }
+      }
+      if (/\/\/dv\d*\.sibnet\.ru\//i.test(candidateSrc)) break;
+    }
+
+    if (!candidateSrc) {
+      for (const script of document.scripts) {
+        const text = script.textContent || "";
+        const m =
+          text.match(/src\s*:\s*["']((?:https?:\/\/[^"']+)?\/v\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/i) ||
+          text.match(/["']((?:https?:\/\/[^"']+)?\/v\/[a-zA-Z0-9/_.-]+\.(?:mp4|m3u8)[^"']*)["']/i);
+        if (m?.[1]) {
+          try {
+            candidateSrc = new URL(m[1], window.location.href).href;
+            break;
+          } catch {
+            // Yoksay
+          }
+        }
+      }
+    }
+
+    if (!isValidStreamHttpUrl(candidateSrc)) return null;
+
+    // Sibnet /v/...mp4 adresi Referer korumalı 302 yönlendirmesi yapar.
+    // Aynı frame içinden hafif bir no-cors HEAD isteği tetikleyerek background.js onBeforeRedirect'in
+    // doğrudan dv*.sibnet.ru CDN adresini yakalamasını sağlıyoruz.
+    if (!/\/\/dv\d*\.sibnet\.ru\//i.test(candidateSrc)) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      try {
+        await fetch(candidateSrc, {
+          method: "HEAD",
+          mode: "no-cors",
+          credentials: "include",
+          redirect: "follow",
+          signal: controller.signal
+        });
+      } catch {
+        // Ağ hatası olursa mevcut aday URL ile devam et
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    return {
+      provider: "sibnet",
+      streamUrl: candidateSrc,
+      format: candidateSrc.toLowerCase().includes(".m3u8") ? "HLS" : "MP4",
+      variantsByHeight: {},
+      title: document.title || "",
+      refreshFromSession: true
+    };
+  }
+
+  // Sayfa ilk yüklendiğinde OK.ru / VK DOM yapılandırmasını hafifçe önbelleğe al
+  // (oynatıcı başladıktan sonra data-options silinse bile çözünürlükler korunsun)
+  let initialEmbedSnapshot = null;
+  const currentEmbedProvider = detectEmbedProvider(window.location.href);
+  if (currentEmbedProvider === "okru") {
+    initialEmbedSnapshot = parseOkRuDom();
+  } else if (currentEmbedProvider === "vk") {
+    initialEmbedSnapshot = parseVkDom();
+  }
+
+  async function extractEmbedStreamInPage(rawUrl, options = {}) {
+    if (options.isAndroid) {
+      const ytId = extractYouTubeVideoId(rawUrl);
+      if (ytId) {
+        const yt = await extractYouTubeHlsOnAndroid(rawUrl);
+        if (yt?.streamUrl) {
+          return {
+            provider: "youtube",
+            streamUrl: yt.streamUrl,
+            format: "HLS",
+            variantsByHeight: {},
+            title: yt.title || document.title || ""
+          };
+        }
+        return null;
+      }
+    }
+
+    const provider = detectEmbedProvider(rawUrl);
+    if (provider === "okru") {
+      return parseOkRuDom() || initialEmbedSnapshot;
+    }
+    if (provider === "vk") {
+      return parseVkDom() || initialEmbedSnapshot;
+    }
+    if (provider === "mailru") {
+      return await extractMailRuStream();
+    }
+    if (provider === "sibnet") {
+      return await extractSibnetStream();
+    }
+    return null;
+  }
+
+  // Toolbar popup üzerinden aktif sekme sorgulandığında Android için doğrudan HLS/MP4 çıkar
   chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "EXTRACT_YOUTUBE_HLS_ANDROID") return false;
     const vid = extractYouTubeVideoId(window.location.href);
-    if (!vid) {
-      sendResponse({ ok: false });
+    const provider = detectEmbedProvider(window.location.href);
+    if (!vid && !provider) {
+      // Cross-origin iframe yanıtını ezmemek için eşleşmeyen frame'lerde sendResponse çağırma
       return false;
     }
 
     (async () => {
-      const extracted = await extractYouTubeHlsOnAndroid(window.location.href);
+      const extracted = await extractEmbedStreamInPage(window.location.href, { isAndroid: true });
       if (extracted?.streamUrl) {
+        let finalStreamUrl = extracted.streamUrl;
         try {
-          await chrome.runtime.sendMessage({
+          const regRes = await chrome.runtime.sendMessage({
             type: "REGISTER_EXTRACTED_STREAM",
             streamUrl: extracted.streamUrl,
-            title: extracted.title
+            format: extracted.format,
+            variantsByHeight: extracted.variantsByHeight,
+            title: extracted.title,
+            pageUrl: window.location.href,
+            userAgent: navigator.userAgent
           });
+          if (regRes?.streamUrl) finalStreamUrl = regRes.streamUrl;
         } catch {
           // Yoksay
         }
-        sendResponse({ ok: true, streamUrl: extracted.streamUrl, title: extracted.title });
+        sendResponse({ ok: true, streamUrl: finalStreamUrl, title: extracted.title });
       } else {
         sendResponse({ ok: false });
       }
@@ -1052,44 +1436,81 @@
         // Varsayılan listeyi koru
       }
 
-      if (isAndroid) {
-        const ytVideoId = extractYouTubeVideoId(window.location.href);
-        if (ytVideoId) {
-          badgeEl.textContent = "...";
-          triggerBtn.disabled = true;
-          try {
-            const extracted = await extractYouTubeHlsOnAndroid(window.location.href);
-            if (extracted?.streamUrl) {
-              const regRes = await chrome.runtime.sendMessage({
-                type: "REGISTER_EXTRACTED_STREAM",
-                streamUrl: extracted.streamUrl,
-                title: extracted.title
-              });
-              if (regRes?.ok && regRes.intentUri) {
-                androidIntents = { best: regRes.intentUri };
-                streamUrls = { best: extracted.streamUrl };
-                heights = [];
-                mode = "youtube_hls";
-              }
-            }
-          } catch {
-            // Yoksay
-          } finally {
-            badgeEl.textContent = "mpv";
-            triggerBtn.disabled = false;
-          }
-        }
+      const ytVideoId = isAndroid ? extractYouTubeVideoId(window.location.href) : null;
+      const embedProvider = detectEmbedProvider(window.location.href);
+      const needsAndroidExtract =
+        isAndroid &&
+        (Boolean(ytVideoId) ||
+          (Boolean(embedProvider) &&
+            (!androidIntents.best ||
+              (heights.length === 0 && embedProvider !== "sibnet") ||
+              (embedProvider === "sibnet" && /\/v\//i.test(streamUrls.best || "")))));
+      const needsDesktopEmbedExtract =
+        !isAndroid &&
+        Boolean(embedProvider) &&
+        (mode === "ytdl" || (heights.length === 0 && embedProvider !== "sibnet"));
 
-        if (!androidIntents.best) {
-          showToast(
-            ytVideoId
-              ? "Could not extract YouTube HLS stream for this video."
-              : "Play the video first so its stream URL can be captured.",
-            "error",
-            3600
-          );
-          return;
+      if (needsAndroidExtract || needsDesktopEmbedExtract) {
+        badgeEl.textContent = "...";
+        triggerBtn.disabled = true;
+        try {
+          const extracted = await extractEmbedStreamInPage(window.location.href, { isAndroid });
+          if (extracted?.streamUrl) {
+            const regRes = await chrome.runtime.sendMessage({
+              type: "REGISTER_EXTRACTED_STREAM",
+              streamUrl: extracted.streamUrl,
+              format: extracted.format,
+              variantsByHeight: extracted.variantsByHeight,
+              title: extracted.title,
+              pageUrl: window.location.href,
+              userAgent: navigator.userAgent
+            });
+
+            if (extracted.refreshFromSession) {
+              const refreshed = await chrome.runtime.sendMessage({
+                type: "GET_VIDEO_RESOLUTIONS",
+                ...collectVideoContext(video, meta)
+              });
+              if (refreshed?.ok && (refreshed.androidIntents?.best || !isAndroid)) {
+                mode = refreshed.mode || mode;
+                heights = Array.isArray(refreshed.heights) ? refreshed.heights : heights;
+                androidIntents = refreshed.androidIntents || androidIntents;
+                streamUrls = refreshed.streamUrls || streamUrls;
+              } else if (regRes?.ok) {
+                heights = Array.isArray(regRes.heights) ? regRes.heights : [];
+                androidIntents = regRes.androidIntents || {};
+                streamUrls = regRes.streamUrls || { best: extracted.streamUrl };
+                mode = heights.length > 0 ? "hls_master" : "direct";
+              }
+            } else if (regRes?.ok) {
+              heights = Array.isArray(regRes.heights) ? regRes.heights : [];
+              androidIntents = regRes.androidIntents || {};
+              streamUrls = regRes.streamUrls || { best: extracted.streamUrl };
+              mode =
+                extracted.provider === "youtube"
+                  ? "youtube_hls"
+                  : heights.length > 0
+                    ? "hls_master"
+                    : "direct";
+            }
+          }
+        } catch {
+          // Hata olursa mevcut algılanan akış listesiyle devam et
+        } finally {
+          badgeEl.textContent = "mpv";
+          triggerBtn.disabled = false;
         }
+      }
+
+      if (isAndroid && !androidIntents.best) {
+        showToast(
+          ytVideoId
+            ? "Could not extract YouTube HLS stream for this video."
+            : "Play the video first so its stream URL can be captured.",
+          "error",
+          3600
+        );
+        return;
       }
 
       renderResolutionItems(heights, mode, isAndroid, androidIntents, streamUrls);

@@ -237,4 +237,80 @@ test("Video overlay matching: multiple videos on page match by direct src or rec
   assert.equal(matchAmbiguous.reason, "AMBIGUOUS_MULTIPLE_VIDEOS");
 });
 
+// VK, OK.ru, Mail.ru ve Sibnet senaryoları: MSE parçaları/init dosyaları/reklamlar elenir, gerçek akışlar korunur
+test("Embed players (VK, OK.ru, Mail.ru, Sibnet): filters MSE chunks, vinit/ainit & ads without false positives", () => {
+  // Mail.ru fMP4 başlatma parçaları ve mradx.net reklamları elenmeli
+  assert.equal(
+    isMediaSegment("https://cdn72.my.mail.ru/hv/63357575.mp4/vinit.mp4", "video/mp4"),
+    true
+  );
+  assert.equal(
+    isMediaSegment("https://cdn72.my.mail.ru/hv/63357575.mp4/ainit.mp4", "audio/mp4"),
+    true
+  );
+  assert.equal(isBlockedDomain("https://r.mradx.net/img/AB/123456.mp4"), true);
+
+  // İçinde 'init' geçen gerçek video isimleri (örn. initial_d_ep1.mp4) YANLIŞLIKLA elenmemeli!
+  const realAnimeMp4 = classifyCandidate("https://cdn.example.com/anime/initial_d_ep1_720p.mp4", "video/mp4");
+  assert.ok(realAnimeMp4);
+  assert.equal(realAnimeMp4.format, "MP4");
+
+  // VK / OK.ru (vkuser.net / okcdn.ru) DASH MSE byte-range ve ayrık ct=4/6 parçaları elenmeli
+  assert.equal(
+    isMediaSegment(
+      "https://vk6-29.vkuser.net/?expires=1793566&type=1&subId=190&ct=6&bytes=0-262143",
+      "video/mp4"
+    ),
+    true
+  );
+  assert.equal(
+    isMediaSegment(
+      "https://ok8-11.vkuser.net/?expires=1793566&ct=4&sig=abc",
+      "video/webm"
+    ),
+    true
+  );
+
+  // VK / OK.ru tam MP4 (ct=0) ve HLS Master (.m3u8, ct=8) akışları ise kabul edilmeli!
+  const vkProgressiveMp4 = classifyCandidate(
+    "https://vk6-29.vkuser.net/?srcIp=1.2.3.4&expires=1793566&srcAg=CHROME_ANDROID&type=3&subId=190&ct=0&id=190",
+    "video/mp4"
+  );
+  assert.ok(vkProgressiveMp4);
+  assert.equal(vkProgressiveMp4.format, "MP4");
+
+  const vkHlsMaster = classifyCandidate(
+    "https://vk6-29.vkuser.net/video.m3u8?srcIp=1.2.3.4&expires=1793566&ct=8&id=190",
+    "application/vnd.apple.mpegurl"
+  );
+  assert.ok(vkHlsMaster);
+  assert.equal(vkHlsMaster.format, "HLS");
+
+  // Sibnet 302 yönlendirme sonrası aliasUrls eşleşmesi: DOM'da /v/...mp4 varken dv*.sibnet.ru seçilmeli
+  const sibnetStreams = [
+    {
+      url: "https://dv82.sibnet.ru/38/12/34/1887072.mp4?st=abc&e=1799999",
+      dedupeKey: "https://dv82.sibnet.ru/38/12/34/1887072.mp4",
+      aliasUrls: ["https://video.sibnet.ru/v/hash123/1887072.mp4"],
+      frameId: 3,
+      format: "MP4",
+      streamType: "direct",
+      priority: STREAM_PRIORITY.DIRECT_MP4,
+      updatedAt: 90_000
+    }
+  ];
+  const matchedSibnet = matchStreamForVideoContext(sibnetStreams, {
+    frameId: 3,
+    currentSrc: "https://video.sibnet.ru/v/hash123/1887072.mp4",
+    src: "https://video.sibnet.ru/v/hash123/1887072.mp4",
+    videoCountInFrame: 1
+  });
+  assert.ok(matchedSibnet.stream);
+  assert.equal(matchedSibnet.reason, "MATCHED_DOM_URL");
+  assert.equal(
+    matchedSibnet.stream.url,
+    "https://dv82.sibnet.ru/38/12/34/1887072.mp4?st=abc&e=1799999"
+  );
+});
+
 console.log(`All ${passed} extension unit tests passed successfully!`);

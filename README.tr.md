@@ -14,7 +14,7 @@
 
 - **Oynatıcı Kontrol Çubuğuna Entegre Buton:** YouTube, JWPlayer, Video.js, ArtPlayer, Plyr ve DPlayer gibi oynatıcılarda sağ alttaki ayar/altyazı/tam ekran butonlarının hemen yanına yerleşir. Özel kontrol çubuğu olmayan sitelerde sağ alt köşede şık bir yüzen buton olarak belirir.
 - **Çözünürlük Seçim Menüsü:** Butona tıkladığınızda videonun desteklediği çözünürlükleri (**4K 2160p, 2K 1440p, 1080p, 720p, 480p, 360p, Auto/Best** ve **Audio Only**) listeler; seçtiğiniz kalitede `mpv`'yi başlatır.
-- **Türkçe Anime & Dizi Siteleri (`iframe` Embed) Desteği:** Alucard, Tau Video, Vidmoly, Sibnet, Amani vb. `iframe` tabanlı oynatıcılardaki gizlenmiş HLS (`/hls/.../master.txt`), imzalı `.m3u8` ve çoklu `.mp4` akışlarını yakalar; macOS üzerinde `403 Forbidden` hatası almamak için `Referer`, `Origin` ve `User-Agent` başlıklarını `mpv`'ye aktarır.
+- **Türkçe Anime & Dizi Siteleri (`iframe` Embed) Desteği:** **OK.ru, VK, Mail.ru, Sibnet, Dailymotion**, Alucard, Tau Video, Vidmoly, Amani vb. `iframe` tabanlı oynatıcılardaki gizlenmiş HLS (`/hls/.../master.txt`), imzalı `.m3u8`, `302` yönlendirmeli CDN linklerini ve çoklu `.mp4` akışlarını hem macOS hem Android için yakalar.
 - **YouTube SABR `403` Koruması Uyumlu (macOS & Android):**
   - **macOS:** `mpv` + `yt-dlp` entegrasyonunda HLS (`m3u8`) öncelikli format seçimiyle YouTube videolarını kapanmadan yüksek kare hızında (60fps) oynatır.
   - **Android:** Mobilde `yt-dlp` gerektirmeden doğrudan tarayıcı içinden YouTube HLS `.m3u8` yayın akışını çıkararak `mpv-android` içinde ses + görüntü olarak açar.
@@ -86,6 +86,10 @@ make
 3. Hazır üretilmiş **`dist/stream-to-mpv-extension.zip`** dosyasını telefonunuza gönderin *(veya bilgisayarınızda `make zip` komutuyla yeniden oluşturabilirsiniz)*.
 4. Telefondaki tarayıcının **Extensions (`chrome://extensions`)** menüsünü açın, **Developer mode** anahtarını etkinleştirin ve `stream-to-mpv-extension.zip` dosyasını yükleyin.
 5. **Bare Browser Kullanıyorsanız Kritik Ayar:** Bare Browser varsayılan olarak tüm harici uygulama geçişlerini engeller (`Open links in apps = Never`). Tek dokunuşla `mpv-android` açılması için **Bare Browser → Settings → Open links in apps → `Always` (veya `Ask`)** seçeneğini etkinleştirin. *(Gizli sekmede veya bu ayarı açmadan kullanmak isterseniz menüdeki **`Share Stream to App…`** seçeneğine basıp Android paylaşım ekranından **Open with mpv** diyerek de açabilirsiniz).*
+6. **Android'de VK & OK.ru İçin Tek Seferlik İpucu (İsteğe Bağlı):** **YouTube, Mail.ru, Sibnet, Dailymotion ve Tau** oynatıcıları `mpv-android` içinde hiçbir ek ayar olmadan doğrudan açılır. **VK** ve **OK.ru** sunucuları (`vkuser.net`) URL imzasında tarayıcı `User-Agent` (`srcAg`) kontrolü yaptığı için, bu iki oynatıcının da Android'de sorunsuz açılması adına **`mpv-android → Settings → Advanced → Edit mpv.conf`** ekranına tek seferlik şu satırı ekleyebilirsiniz:
+   ```ini
+   user-agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+   ```
 
 ---
 
@@ -100,7 +104,7 @@ make
 ## Bilinen Sınırlar ve Güvenlik Notları
 
 1. **DRM Korumalı İçerikler (Netflix, Disney+, Spotify vb.):** Widevine / FairPlay şifreli içerikler yasal ve teknik olarak harici oynatıcılarda çözülemez; eklenti bu akışları tespit ettiğinde `Unsupported stream (DRM)` uyarısı gösterir.
-2. **Android Intent HTTP Başlık Kısıtı:** Resmi `mpv-android` (`is.xyz.mpv`) uygulaması, Android `ACTION_VIEW` Intent'leri üzerinden özel HTTP `Referer` veya `User-Agent` başlıklarını henüz okumamaktadır (`MPVActivity.kt` kaynak kodunda `TODO` durumundadır). YouTube ve sıkı `Referer` kontrolü yapmayan sunucular (Sibnet, Tau, OK.ru, Mail.ru, GDrive vb.) Android'de doğrudan açılırken, sıkı `Referer` korumalı bazı embed sunucuları (örn. Alucard / Vidmoly) Android üzerinde `403` dönebilir (macOS üzerinde ise `Referer` + `Origin` + `User-Agent` tam desteklidir ve hepsi sorunsuz çalışır).
+2. **Android Intent HTTP Başlık Kısıtı:** Resmi `mpv-android` (`is.xyz.mpv`) uygulaması, Android `ACTION_VIEW` Intent'leri üzerinden özel HTTP `Referer` veya `User-Agent` başlıklarını henüz okumamaktadır (`MPVActivity.kt` kaynak kodunda `TODO` durumundadır). **YouTube, Mail.ru, Sibnet, Dailymotion, Tau ve GDrive** Android'de hiçbir ayar olmadan doğrudan açılır; **VK ve OK.ru** ise `mpv.conf` içine yukarıdaki 6. adımda verilen `user-agent` satırı eklendiğinde doğrudan çalışır. Yalnızca sıkı `Referer` korumalı bazı sunucular (örn. Alucard / Vidmoly) Android üzerinde `403` dönebilir (macOS üzerinde ise `Referer` + `Origin` + `User-Agent` tam desteklidir ve hepsi sorunsuz çalışır).
 3. **Gizlilik ve Güvenlik:** Eklenti çerezlerinizi (`Cookie`) veya `Authorization` başlıklarınızı izinsiz olarak harici süreçlere sızdırmaz. Native Host (`mpv_host.py`) yalnızca `http://` ve `https://` şemalarını kabul eder, `shell=False` ile çalışır ve çağrıyı yapan eklenti kimliğini (`allowed_origins`) doğrular.
 
 ---

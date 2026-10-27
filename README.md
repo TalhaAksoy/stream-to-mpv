@@ -14,7 +14,7 @@
 
 - **Inline Player Control Bar Button:** Integrates seamlessly next to the Settings / Subtitles / Fullscreen icons on YouTube, JWPlayer, Video.js, ArtPlayer, Plyr, and DPlayer. Falls back to a clean floating bottom-right control pill on custom players.
 - **Resolution Selector Menu:** Choose **4K (2160p), 2K (1440p), 1080p, 720p, 480p, 360p, Auto (Best Quality)**, or **Audio Only** right before launching `mpv`.
-- **Iframe & Anime/Movie Embed Support:** Captures disguised HLS playlists (e.g., `/hls/.../master.txt`), rotating signed `.m3u8` tokens, and multi-quality `.mp4` sources inside cross-origin `<iframe>` embeds (Alucard, Tau Video, Vidmoly, Sibnet, etc.) and forwards `Referer` + `Origin` + `User-Agent` to `mpv` on macOS to prevent `403 Forbidden` errors.
+- **Iframe & Anime/Movie Embed Support:** Captures disguised HLS playlists (e.g., `/hls/.../master.txt`), rotating signed `.m3u8` tokens, `302`-redirected CDN links, and multi-quality `.mp4` / HLS sources inside cross-origin `<iframe>` embeds (**OK.ru, VK, Mail.ru, Sibnet, Dailymotion**, Alucard, Tau Video, Vidmoly, etc.) across both macOS and Android.
 - **YouTube SABR `403`-Safe Playback (macOS & Android):**
   - On **macOS**, prioritizes HLS (`m3u8`) formats via `mpv` + `yt-dlp` for smooth 1080p60/4K playback without closing.
   - On **Android**, extracts YouTube's direct HLS Master `.m3u8` stream in-browser so `mpv-android` plays video + audio directly without requiring `yt-dlp`.
@@ -86,6 +86,10 @@ Running `make` automatically:
 3. Send the pre-built **`dist/stream-to-mpv-extension.zip`** archive to your phone *(or rebuild it anytime with `make zip`)*.
 4. Open **`chrome://extensions`** in your mobile browser, turn on **Developer mode**, and load `stream-to-mpv-extension.zip`.
 5. **Required Setting for Bare Browser:** Bare Browser blocks external app handoffs by default (`Open links in apps = Never`). Go to **Bare Browser → Settings → Open links in apps** and select **`Always`** (or **`Ask`**) for one-tap launching into `mpv-android`. *(If you are in Incognito mode or prefer keeping that setting off, tap **`Share Stream to App…`** inside the `mpv` menu and pick **Open with mpv** from the Android share sheet).*
+6. **Optional Tip for VK & OK.ru on Android:** **YouTube, Mail.ru, Sibnet, Dailymotion, and Tau** streams play out-of-the-box in `mpv-android`. For **VK** and **OK.ru** embeds (whose `vkuser.net` CDN verifies a Chrome `User-Agent` signature via `srcAg`), open **`mpv-android → Settings → Advanced → Edit mpv.conf`** once and add:
+   ```ini
+   user-agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+   ```
 
 ---
 
@@ -100,7 +104,7 @@ Running `make` automatically:
 ## Known Limitations & Security
 
 1. **DRM-Protected Streams (Netflix, Disney+, Spotify, etc.):** Widevine / FairPlay encrypted streams cannot be played in external players; the extension detects them and displays an `Unsupported stream (DRM)` notice.
-2. **Android Intent HTTP Header Limitation:** Official `mpv-android` (`is.xyz.mpv`) does not yet parse custom `Referer` or `User-Agent` headers from Android `ACTION_VIEW` Intents (`TODO` in upstream `MPVActivity.kt`). YouTube and standard `.m3u8` / `.mp4` servers (e.g., Sibnet, Tau, OK.ru, GDrive) play directly on Android, whereas strict `Referer`-locked embed CDNs (e.g., Alucard / Vidmoly) may return `403` on Android (all of them work seamlessly on macOS where full headers are passed).
+2. **Android Intent HTTP Header Limitation:** Official `mpv-android` (`is.xyz.mpv`) does not yet parse custom `Referer` or `User-Agent` headers from Android `ACTION_VIEW` Intents (`TODO` in upstream `MPVActivity.kt`). **YouTube, Mail.ru, Sibnet, Dailymotion, Tau, and GDrive** play directly on Android out-of-the-box, and **VK / OK.ru** work once a browser `user-agent` is set in `mpv.conf` (see Step 6 above). Strict `Referer`-locked embed CDNs (e.g., Alucard / Vidmoly) may still return `403` on Android (all of them work seamlessly on macOS where full headers are passed).
 3. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and `--no-config` safety checks, rejects CRLF header injection, and validates caller `allowed_origins`.
 
 ---

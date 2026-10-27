@@ -19,6 +19,7 @@ let lastNativePayload = null;
 function setupChromeMock() {
   listeners = {
     onSendHeaders: [],
+    onBeforeRedirect: [],
     onHeadersReceived: [],
     onErrorOccurred: [],
     onTabRemoved: [],
@@ -52,6 +53,13 @@ function setupChromeMock() {
           if (key === null) return structuredClone(sessionStore);
           if (typeof key === "string") {
             return key in sessionStore ? { [key]: structuredClone(sessionStore[key]) } : {};
+          }
+          if (Array.isArray(key)) {
+            const out = {};
+            for (const k of key) {
+              if (k in sessionStore) out[k] = structuredClone(sessionStore[k]);
+            }
+            return out;
           }
           return {};
         },
@@ -92,6 +100,9 @@ function setupChromeMock() {
     webRequest: {
       onSendHeaders: {
         addListener: (fn) => listeners.onSendHeaders.push(fn)
+      },
+      onBeforeRedirect: {
+        addListener: (fn) => listeners.onBeforeRedirect.push(fn)
       },
       onHeadersReceived: {
         addListener: (fn) => listeners.onHeadersReceived.push(fn)
@@ -332,5 +343,96 @@ assert.ok(regYt.intentUri.includes(";type=video/*;"));
 
 simulatePlatformOs = "mac";
 console.log("  [PASS] Android (Bare Browser) intent:// generation uses type=video/*, never sends raw HTML page URLs, and registers extracted YouTube HLS");
+
+// Sibnet 302 yönlendirmesi (video.sibnet.ru/v/...mp4 -> dv82.sibnet.ru/...mp4) ve çoklu çözünürlüklü
+// OK.ru / Mail.ru / VK REGISTER_EXTRACTED_STREAM testi (Android + macOS)
+mockTabs.set(505, { id: 505, url: "https://www.tranimeizle.live/ep-1", title: "Anime Ep 1" });
+await listeners.onSendHeaders[0]({
+  requestId: "r_sib_1",
+  tabId: 505,
+  frameId: 4,
+  url: "https://video.sibnet.ru/v/abcd123/1887072.mp4",
+  requestHeaders: [
+    { name: "Referer", value: "https://video.sibnet.ru/shell.php?videoid=1887072" },
+    { name: "User-Agent", value: "MobileChrome/131.0" }
+  ]
+});
+await listeners.onHeadersReceived[0]({
+  requestId: "r_sib_1",
+  tabId: 505,
+  frameId: 4,
+  statusCode: 302,
+  url: "https://video.sibnet.ru/v/abcd123/1887072.mp4",
+  responseHeaders: [{ name: "Location", value: "https://dv82.sibnet.ru/38/99/1887072.mp4?st=xyz&e=1799999" }]
+});
+await listeners.onBeforeRedirect[0]({
+  requestId: "r_sib_1",
+  tabId: 505,
+  frameId: 4,
+  url: "https://video.sibnet.ru/v/abcd123/1887072.mp4",
+  redirectUrl: "https://dv82.sibnet.ru/38/99/1887072.mp4?st=xyz&e=1799999"
+});
+
+simulatePlatformOs = "android";
+const sibnetAndroidRes = await sendMessageToBg(
+  {
+    type: "GET_VIDEO_RESOLUTIONS",
+    currentSrc: "https://video.sibnet.ru/v/abcd123/1887072.mp4",
+    src: "https://video.sibnet.ru/v/abcd123/1887072.mp4",
+    sources: [],
+    videoCountInFrame: 1,
+    actionTimestamp: Date.now(),
+    pageUrl: "https://video.sibnet.ru/shell.php?videoid=1887072"
+  },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 505, url: "https://www.tranimeizle.live/ep-1", title: "Anime Ep 1" }, frameId: 4 }
+);
+assert.equal(sibnetAndroidRes.ok, true);
+assert.equal(sibnetAndroidRes.streamUrls.best, "https://dv82.sibnet.ru/38/99/1887072.mp4?st=xyz&e=1799999");
+assert.ok(sibnetAndroidRes.androidIntents.best.startsWith("intent://dv82.sibnet.ru/38/99/1887072.mp4?st=xyz&e=1799999#Intent;"));
+
+// OK.ru / Mail.ru / VK çoklu çözünürlüklü REGISTER_EXTRACTED_STREAM -> Android intent + macOS seçim testi
+const okExtracted = await sendMessageToBg(
+  {
+    type: "REGISTER_EXTRACTED_STREAM",
+    streamUrl: "https://vd414.okcdn.ru/video.m3u8?cmd=videoPlayerCdn&srcAg=CHROME_ANDROID",
+    format: "HLS",
+    variantsByHeight: {
+      1080: "https://ok8-11.vkuser.net/?type=5&ct=0&id=777",
+      720: "https://ok8-11.vkuser.net/?type=3&ct=0&id=777",
+      360: "https://ok8-11.vkuser.net/?type=1&ct=0&id=777"
+    },
+    title: "OK Embed Episode",
+    pageUrl: "https://ok.ru/videoembed/4637825762649",
+    userAgent: "AndroidChrome/131.0"
+  },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 505, url: "https://www.tranimeizle.live/ep-1", title: "Anime Ep 1" }, frameId: 5 }
+);
+assert.equal(okExtracted.ok, true);
+assert.deepEqual(okExtracted.heights, [1080, 720, 360]);
+assert.ok(okExtracted.androidIntents["720"].startsWith("intent://ok8-11.vkuser.net/?type=3&ct=0&id=777#Intent;"));
+
+// Masaüstünde aynı kayıttan 720p seçildiğinde tam 720p URL + iframe Referer + User-Agent gitmeli
+simulatePlatformOs = "mac";
+const okMacOpen = await sendMessageToBg(
+  {
+    type: "OPEN_FROM_VIDEO_OVERLAY",
+    preferredResolution: "720",
+    currentSrc: "blob:https://ok.ru/1234",
+    src: "",
+    sources: [],
+    videoCountInFrame: 1,
+    actionTimestamp: Date.now(),
+    pageUrl: "https://ok.ru/videoembed/4637825762649"
+  },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 505, url: "https://www.tranimeizle.live/ep-1", title: "Anime Ep 1" }, frameId: 5 }
+);
+assert.equal(okMacOpen.ok, true);
+assert.equal(lastNativePayload.payload.url, "https://ok8-11.vkuser.net/?type=3&ct=0&id=777");
+assert.equal(lastNativePayload.payload.referer, "https://ok.ru/videoembed/4637825762649");
+assert.equal(lastNativePayload.payload.user_agent, "AndroidChrome/131.0");
+console.log("  [PASS] Sibnet 302 redirect & OK.ru/Mail.ru/VK multi-resolution extraction work across Android & macOS");
 
 console.log("All background lifecycle & concurrency tests passed!");

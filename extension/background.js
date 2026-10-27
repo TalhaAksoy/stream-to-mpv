@@ -240,7 +240,12 @@ async function recordStreamCandidate(tabId, candidateData) {
 
     const dedupeKey = computeDedupeKey(candidateData.url);
     const now = Date.now();
-    const existingIdx = tabState.streams.findIndex((s) => s.dedupeKey === dedupeKey);
+    const existingIdx = tabState.streams.findIndex(
+      (s) =>
+        s.dedupeKey === dedupeKey ||
+        (Array.isArray(s.aliasUrls) &&
+          (s.aliasUrls.includes(candidateData.url) || s.aliasUrls.includes(dedupeKey)))
+    );
 
     let domain = "";
     try {
@@ -250,9 +255,14 @@ async function recordStreamCandidate(tabId, candidateData) {
     }
 
     if (existingIdx !== -1) {
-      // Aynı akışın yeni imzalı/güncel URL'si geldi: eskiyi silmeden en güncel URL'yi koru
+      // Aynı akışın yeni imzalı/güncel URL'si geldi: eskiyi silmeden en güncel URL'yi koru.
+      // Ancak 302 yönlendirme öncesi alias geldiyse çözümlenmiş son CDN URL'sini geri alma!
       const existing = tabState.streams[existingIdx];
-      existing.url = candidateData.url;
+      const matchedViaRedirectAlias = existing.dedupeKey !== dedupeKey;
+      const urlChanged = !matchedViaRedirectAlias && existing.url !== candidateData.url;
+      if (!matchedViaRedirectAlias) {
+        existing.url = candidateData.url;
+      }
       existing.updatedAt = now;
       existing.tabTitle = pageTitle;
       if (candidateData.referer) existing.referer = candidateData.referer;
@@ -260,10 +270,39 @@ async function recordStreamCandidate(tabId, candidateData) {
       if (typeof candidateData.frameId === "number") existing.frameId = candidateData.frameId;
       if (candidateData.quality && !existing.quality) existing.quality = candidateData.quality;
 
-      // Eğer daha önce doğrulanmamışsa ve yeni bilgi daha yüksek öncelikliyse güncelle
-      if (!existing.verified && candidateData.priority < existing.priority) {
+      if (Array.isArray(candidateData.aliasUrls) && candidateData.aliasUrls.length > 0) {
+        const mergedAliases = new Set([...(existing.aliasUrls || []), ...candidateData.aliasUrls]);
+        existing.aliasUrls = Array.from(mergedAliases);
+      }
+
+      if (
+        candidateData.variantsByHeight &&
+        typeof candidateData.variantsByHeight === "object" &&
+        Object.keys(candidateData.variantsByHeight).length > 0
+      ) {
+        existing.variantsByHeight = {
+          ...(existing.variantsByHeight || {}),
+          ...candidateData.variantsByHeight
+        };
+        existing.availableHeights = Object.keys(existing.variantsByHeight)
+          .map((k) => parseInt(k, 10))
+          .filter((h) => !Number.isNaN(h) && h > 0)
+          .sort((a, b) => b - a);
+      }
+
+      if (candidateData.verified) {
+        existing.verified = true;
+        existing.priority = Math.min(existing.priority, candidateData.priority);
+        existing.streamType = candidateData.streamType;
+      } else if (!existing.verified && candidateData.priority < existing.priority) {
+        // Eğer daha önce doğrulanmamışsa ve yeni bilgi daha yüksek öncelikliyse güncelle
         existing.priority = candidateData.priority;
         existing.streamType = candidateData.streamType;
+      }
+
+      // İmzalı HLS Master URL'si yenilendiyse alt variant token'larının bayat kalmaması için yeniden doğrula
+      if (urlChanged && candidateData.needsVerification && !candidateData.variantsByHeight) {
+        shouldVerifyHls = true;
       }
     } else {
       const newEntry = {
@@ -275,13 +314,18 @@ async function recordStreamCandidate(tabId, candidateData) {
         pageUrl,
         domain,
         url: candidateData.url,
+        aliasUrls: Array.isArray(candidateData.aliasUrls) ? candidateData.aliasUrls : [],
         referer: candidateData.referer || pageUrl || "",
         userAgent: candidateData.userAgent || "",
         format: candidateData.format,
         streamType: candidateData.streamType,
         priority: candidateData.priority,
         quality: candidateData.quality || null,
-        verified: false,
+        availableHeights: Array.isArray(candidateData.availableHeights)
+          ? candidateData.availableHeights
+          : undefined,
+        variantsByHeight: candidateData.variantsByHeight || undefined,
+        verified: Boolean(candidateData.verified),
         unsupportedReason: candidateData.unsupportedReason || null,
         capturedAt: now,
         updatedAt: now
@@ -415,16 +459,20 @@ chrome.webRequest.onSendHeaders.addListener(
     }
 
     // URL üzerinden doğrudan sınıflandırma yapılabiliyorsa kaydet, ayrıca onHeadersReceived için pending'de tut
+    let existingAliases = [];
     await withSessionLock(async () => {
       const stored = await chrome.storage.session.get("pendingRequests");
       const pending = stored.pendingRequests || {};
+      const prevMeta = pending[details.requestId];
+      existingAliases = Array.isArray(prevMeta?.aliasUrls) ? prevMeta.aliasUrls : [];
 
       pending[details.requestId] = {
         url: details.url,
         tabId: details.tabId,
-        frameId: typeof details.frameId === "number" ? details.frameId : 0,
-        referer,
-        userAgent,
+        frameId: typeof details.frameId === "number" ? details.frameId : (prevMeta?.frameId ?? 0),
+        referer: referer || prevMeta?.referer || "",
+        userAgent: userAgent || prevMeta?.userAgent || "",
+        aliasUrls: existingAliases,
         timestamp: Date.now()
       };
 
@@ -447,12 +495,94 @@ chrome.webRequest.onSendHeaders.addListener(
         frameId: typeof details.frameId === "number" ? details.frameId : 0,
         referer,
         userAgent,
+        aliasUrls: existingAliases,
         ...urlClassified
       });
     }
   },
   { urls: ["http://*/*", "https://*/*"] },
   ["requestHeaders", "extraHeaders"]
+);
+
+/**
+ * webRequest.onBeforeRedirect: Sibnet (/v/...mp4 -> dv*.sibnet.ru/...mp4) gibi Referer korumalı
+ * 302 yönlendirmelerini izleyerek son CDN adresini kaydeder; böylece hem DOM video.src eşleşmesi
+ * korunur hem de Android mpv-android doğrudan son CDN adresini Referer engeline takılmadan açar.
+ */
+chrome.webRequest.onBeforeRedirect?.addListener(
+  async (details) => {
+    if (details.tabId < 0) return;
+    if (!isValidHttpUrl(details.url) || !isValidHttpUrl(details.redirectUrl)) return;
+
+    const settings = await getSettings();
+    if (isBlockedDomain(details.redirectUrl, settings.blockedDomains)) return;
+
+    const fromClassified = classifyCandidate(details.url, "");
+    const toClassified = classifyCandidate(details.redirectUrl, "");
+    if (!fromClassified && !toClassified) return;
+
+    const fromDedupe = computeDedupeKey(details.url);
+    const toDedupe = computeDedupeKey(details.redirectUrl);
+
+    await withSessionLock(async () => {
+      const tabKey = `tab_${details.tabId}`;
+      const [storedPending, storedTab] = await Promise.all([
+        chrome.storage.session.get("pendingRequests"),
+        chrome.storage.session.get(tabKey)
+      ]);
+      const pending = storedPending.pendingRequests || {};
+      const prevMeta = pending[details.requestId];
+      const nextAliases = Array.from(
+        new Set([...(prevMeta?.aliasUrls || []), details.url, fromDedupe])
+      );
+
+      pending[details.requestId] = {
+        url: details.redirectUrl,
+        tabId: details.tabId,
+        frameId: typeof details.frameId === "number" ? details.frameId : (prevMeta?.frameId ?? 0),
+        referer: prevMeta?.referer || sanitizeHeaderValue(details.initiator || ""),
+        userAgent: prevMeta?.userAgent || "",
+        aliasUrls: nextAliases,
+        timestamp: Date.now()
+      };
+
+      const tabState = storedTab[tabKey];
+      if (tabState && Array.isArray(tabState.streams)) {
+        const fromIdx = tabState.streams.findIndex(
+          (s) => s.url === details.url || s.dedupeKey === fromDedupe
+        );
+        if (fromIdx !== -1 && (!toClassified || toClassified.streamType !== "unsupported")) {
+          const entry = tabState.streams[fromIdx];
+          const mergedAliases = Array.from(
+            new Set([...(entry.aliasUrls || []), ...nextAliases])
+          );
+          const dupTargetIdx = tabState.streams.findIndex(
+            (s, idx) => idx !== fromIdx && s.dedupeKey === toDedupe
+          );
+          if (dupTargetIdx !== -1) {
+            const targetEntry = tabState.streams[dupTargetIdx];
+            targetEntry.url = details.redirectUrl;
+            targetEntry.updatedAt = Date.now();
+            targetEntry.aliasUrls = Array.from(
+              new Set([...(targetEntry.aliasUrls || []), ...mergedAliases])
+            );
+            tabState.streams.splice(fromIdx, 1);
+          } else {
+            entry.url = details.redirectUrl;
+            entry.dedupeKey = toDedupe;
+            entry.aliasUrls = mergedAliases;
+            entry.updatedAt = Date.now();
+          }
+          tabState.streams = sortStreams(tabState.streams);
+          await chrome.storage.session.set({ pendingRequests: pending, [tabKey]: tabState });
+          return;
+        }
+      }
+
+      await chrome.storage.session.set({ pendingRequests: pending });
+    });
+  },
+  { urls: ["http://*/*", "https://*/*"] }
 );
 
 /**
@@ -463,6 +593,11 @@ chrome.webRequest.onHeadersReceived.addListener(
   async (details) => {
     if (details.tabId < 0) return;
     if (!isValidHttpUrl(details.url)) return;
+
+    // 3xx yönlendirme yanıtlarında pending kaydını silme; onBeforeRedirect hedef CDN adresini devralacak
+    if (typeof details.statusCode === "number" && details.statusCode >= 300 && details.statusCode < 400) {
+      return;
+    }
 
     let reqMeta = null;
     await withSessionLock(async () => {
@@ -494,7 +629,25 @@ chrome.webRequest.onHeadersReceived.addListener(
     }
 
     const classified = classifyCandidate(details.url, contentType, contentLength);
-    if (!classified) return;
+    if (!classified) {
+      // onSendHeaders aşamasında URL uzantısından aday eklenmiş küçük init segmentlerini (<50 KB) temizle
+      if (contentLength !== null && contentLength > 0 && contentLength < 50 * 1024) {
+        const rejectedDedupe = computeDedupeKey(details.url);
+        await withSessionLock(async () => {
+          const tabKey = `tab_${details.tabId}`;
+          const stored = await chrome.storage.session.get(tabKey);
+          const tabState = stored[tabKey];
+          if (!tabState || !Array.isArray(tabState.streams)) return;
+          const beforeLen = tabState.streams.length;
+          tabState.streams = tabState.streams.filter((s) => s.dedupeKey !== rejectedDedupe);
+          if (tabState.streams.length !== beforeLen) {
+            await chrome.storage.session.set({ [tabKey]: tabState });
+            await updateTabBadge(details.tabId, tabState.streams);
+          }
+        });
+      }
+      return;
+    }
 
     await recordStreamCandidate(details.tabId, {
       url: details.url,
@@ -504,6 +657,7 @@ chrome.webRequest.onHeadersReceived.addListener(
           : reqMeta?.frameId ?? 0,
       referer: reqMeta?.referer || sanitizeHeaderValue(details.initiator || ""),
       userAgent: reqMeta?.userAgent || "",
+      aliasUrls: reqMeta?.aliasUrls || [],
       ...classified
     });
   },
@@ -884,32 +1038,90 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const frameId = typeof sender.frameId === "number" ? sender.frameId : 0;
           const streamUrl = message.streamUrl || "";
           const title = message.title || sender.tab?.title || "";
+          const referer = sanitizeHeaderValue(
+            message.pageUrl || sender.url || sender.tab?.url || ""
+          );
+          const userAgent = sanitizeHeaderValue(message.userAgent || "");
 
           if (!isValidHttpUrl(streamUrl)) {
             sendResponse({ ok: false, errorMessage: "Invalid extracted stream URL." });
             return;
           }
 
+          const cleanVariants = {};
+          if (message.variantsByHeight && typeof message.variantsByHeight === "object") {
+            for (const [k, v] of Object.entries(message.variantsByHeight)) {
+              const h = parseInt(String(k), 10);
+              if (!Number.isNaN(h) && h >= 144 && h <= 4320 && isValidHttpUrl(v)) {
+                cleanVariants[h] = v;
+              }
+            }
+          }
+          const heights = Object.keys(cleanVariants)
+            .map((k) => parseInt(k, 10))
+            .sort((a, b) => b - a);
+
+          const isHls =
+            message.format === "HLS" || /\.m3u8(?:$|[/?#])/i.test(streamUrl);
+          const hasMultiHeights = heights.length > 0;
+
+          let effectiveStreamUrl = streamUrl;
           if (typeof tabId === "number" && tabId >= 0) {
             await recordStreamCandidate(tabId, {
               url: streamUrl,
               frameId,
-              referer: sender.tab?.url || "",
-              userAgent: "",
-              format: "HLS",
-              streamType: "master",
-              priority: STREAM_PRIORITY.VERIFIED_HLS_MASTER,
-              quality: null,
-              needsVerification: true
+              referer,
+              userAgent,
+              format: isHls ? "HLS" : "MP4",
+              streamType: isHls || hasMultiHeights ? "master" : "direct",
+              priority:
+                isHls || hasMultiHeights
+                  ? STREAM_PRIORITY.VERIFIED_HLS_MASTER
+                  : STREAM_PRIORITY.DIRECT_MP4,
+              quality: hasMultiHeights ? `Up to ${heights[0]}p` : null,
+              availableHeights: hasMultiHeights ? heights : undefined,
+              variantsByHeight: hasMultiHeights ? cleanVariants : undefined,
+              verified: hasMultiHeights,
+              needsVerification: isHls && !hasMultiHeights
             });
+
+            const storedTab = await chrome.storage.session.get(`tab_${tabId}`);
+            const targetDedupe = computeDedupeKey(streamUrl);
+            const matchedEntry = storedTab[`tab_${tabId}`]?.streams?.find(
+              (s) =>
+                s.dedupeKey === targetDedupe ||
+                (Array.isArray(s.aliasUrls) &&
+                  (s.aliasUrls.includes(streamUrl) || s.aliasUrls.includes(targetDedupe)))
+            );
+            if (matchedEntry && isValidHttpUrl(matchedEntry.url)) {
+              effectiveStreamUrl = matchedEntry.url;
+            }
           }
 
           const isAndroid = await isAndroidPlatform();
+          const streamUrls = { best: effectiveStreamUrl };
+          const androidIntents = {};
+          if (isAndroid) {
+            androidIntents.best = buildAndroidMpvIntentUri(effectiveStreamUrl, title);
+            for (const h of heights) {
+              const vUrl = cleanVariants[h];
+              streamUrls[String(h)] = vUrl;
+              androidIntents[String(h)] = buildAndroidMpvIntentUri(vUrl, title);
+            }
+          } else {
+            for (const h of heights) {
+              streamUrls[String(h)] = cleanVariants[h];
+            }
+          }
+
           sendResponse({
             ok: true,
             isAndroid,
-            streamUrl,
-            intentUri: isAndroid ? buildAndroidMpvIntentUri(streamUrl, title) : null
+            streamUrl: effectiveStreamUrl,
+            heights,
+            streamUrls,
+            androidIntents,
+            intentUri: isAndroid ? androidIntents.best : null
           });
           break;
         }
