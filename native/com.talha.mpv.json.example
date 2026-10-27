@@ -1,0 +1,10 @@
+{
+  "name": "com.talha.mpv",
+  "description": "Native Messaging Host for Stream to mpv extension",
+  "path": "/Users/YOUR_USERNAME/mpv_host/mpv_host.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://haamijddaadhbhjfpblfloidmpglfmnk/",
+    "chrome-extension://fkpcefjdmipnkldbfgdfnnfonimpaiib/"
+  ]
+}

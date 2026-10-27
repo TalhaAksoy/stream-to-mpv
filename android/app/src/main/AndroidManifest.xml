@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Güvenlik: Geniş kapsamlı VPN, Accessibility veya root izni İSTENMEZ.
+      Android 11+ (API 30+) paket görünürlüğü kuralı gereği yalnızca hedef oynatıcı olan
+      is.xyz.mpv (mpv-android) paketinin varlığını sorgulamak için <queries> tanımlanır.
+    -->
+    <queries>
+        <package android:name="is.xyz.mpv" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="Open in mpv"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <!-- Ana Başlatıcı ve Paylaşım (Share Intent) Hedefi -->
+        <activity
+            android:name=".ShareToMpvActivity"
+            android:exported="true"
+            android:excludeFromRecents="false">
+
+            <!-- Uygulama çekmecesinden (Launcher) manuel URL yapıştırıp açmak için -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Chrome for Android ve diğer tarayıcılardan "Paylaş -> Open in mpv" (ACTION_SEND) -->
+            <intent-filter android:label="Open Stream in mpv">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <!-- Doğrudan medya bağlantılarında (ACTION_VIEW) alternatif açıcı olarak -->
+            <intent-filter android:label="Open Stream in mpv">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="application/vnd.apple.mpegurl" />
+                <data android:mimeType="application/x-mpegurl" />
+            </intent-filter>
+        </activity>
+
+    </application>
+</manifest>

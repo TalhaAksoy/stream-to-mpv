@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+__MACOSX/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Build scratch
+dist/pkg_build/
+
+# Android Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.iml

@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stream to mpv</title>
+  <style>
+    :root {
+      --bg-primary: #0f1117;
+      --bg-secondary: #181b24;
+      --bg-card: #1f2430;
+      --bg-card-hover: #262c3a;
+      --border-color: #2e3446;
+      --text-primary: #f0f3f8;
+      --text-secondary: #9ba3b5;
+      --accent: #8e44ad;
+      --accent-hover: #9b59b6;
+      --success: #2ecc71;
+      --warning: #f39c12;
+      --danger: #e74c3c;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 310px;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .brand-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+
+    .status-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+    }
+
+    .status-pill.ready {
+      background: rgba(46, 204, 113, 0.16);
+      border-color: rgba(46, 204, 113, 0.45);
+      color: #82e0aa;
+    }
+
+    .status-pill.missing {
+      background: rgba(231, 76, 60, 0.16);
+      border-color: rgba(231, 76, 60, 0.45);
+      color: #f1948a;
+    }
+
+    .card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 11px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .hint-text {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    .btn {
+      display: inline-block;
+      text-align: center;
+      text-decoration: none;
+      background-color: var(--bg-card);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      transition: background-color 0.15s, border-color 0.15s;
+    }
+
+    .btn:hover:not(:disabled) {
+      background-color: var(--bg-card-hover);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background-color: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background-color: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12.5px;
+      color: var(--text-primary);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle-row input[type="checkbox"] {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .status-banner {
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.35;
+      display: none;
+    }
+
+    .status-banner.visible {
+      display: block;
+    }
+
+    .status-success {
+      background-color: rgba(46, 204, 113, 0.16);
+      border: 1px solid rgba(46, 204, 113, 0.45);
+      color: #82e0aa;
+    }
+
+    .status-error {
+      background-color: rgba(231, 76, 60, 0.16);
+      border: 1px solid rgba(231, 76, 60, 0.45);
+      color: #f1948a;
+    }
+
+    .status-info {
+      background-color: rgba(41, 128, 185, 0.18);
+      border: 1px solid rgba(41, 128, 185, 0.45);
+      color: #85c1e9;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>Stream to mpv</span>
+    </div>
+    <span id="hostBadge" class="status-pill">Checking...</span>
+  </div>
+
+  <div class="card">
+    <p id="primaryHint" class="hint-text">
+      Click the <strong>mpv</strong> button on the video player's bottom-right controls, or launch below.
+    </p>
+    <button id="openCurrentBtn" class="btn btn-primary" type="button">
+      Open Current Tab Video in mpv
+    </button>
+    <a id="androidDirectLink" class="btn btn-primary" href="#" target="_blank" rel="noopener noreferrer" hidden>
+      Open in mpv-android
+    </a>
+    <button id="androidShareBtn" class="btn" type="button" hidden>
+      Share Stream to App…
+    </button>
+  </div>
+
+  <div id="statusBanner" class="status-banner" role="status" aria-live="polite"></div>
+
+  <div class="card">
+    <label class="toggle-row">
+      <span>Auto-open videos</span>
+      <input type="checkbox" id="autoOpenToggle" />
+    </label>
+    <label class="toggle-row">
+      <span>yt-dlp URL fallback</span>
+      <input type="checkbox" id="ytdlpToggle" />
+    </label>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
