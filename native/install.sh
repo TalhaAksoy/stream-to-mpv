@@ -26,13 +26,22 @@ h = hashlib.sha256(p.encode("utf-8")).hexdigest()[:32]
 print("".join(chr(ord("a") + int(c, 16)) for c in h))
 ' "${EXT_DIR}")
 
-# 3. İsteğe bağlı olarak komut satırından verilen ek Extension ID
+# 3. Chrome Web Store'dan kurulan eklentinin ID'si (mağaza "key" alanını kabul etmediği için farklıdır).
+#    Yayınlandıktan sonra Developer Dashboard'daki Item ID buraya yazılmalıdır.
+CHROME_STORE_EXT_ID=""
+
+# 4. İsteğe bağlı olarak komut satırından verilen ek Extension ID
 CUSTOM_EXT_ID="${1:-}"
 
 ORIGINS_JSON="    \"chrome-extension://${KEY_EXT_ID}/\",
     \"chrome-extension://${PATH_EXT_ID}/\""
 
-if [[ -n "${CUSTOM_EXT_ID}" && "${CUSTOM_EXT_ID}" =~ ^[a-p]{32}$ && "${CUSTOM_EXT_ID}" != "${KEY_EXT_ID}" && "${CUSTOM_EXT_ID}" != "${PATH_EXT_ID}" ]]; then
+if [[ "${CHROME_STORE_EXT_ID}" =~ ^[a-p]{32}$ ]]; then
+  ORIGINS_JSON="${ORIGINS_JSON},
+    \"chrome-extension://${CHROME_STORE_EXT_ID}/\""
+fi
+
+if [[ -n "${CUSTOM_EXT_ID}" && "${CUSTOM_EXT_ID}" =~ ^[a-p]{32}$ && "${CUSTOM_EXT_ID}" != "${KEY_EXT_ID}" && "${CUSTOM_EXT_ID}" != "${PATH_EXT_ID}" && "${CUSTOM_EXT_ID}" != "${CHROME_STORE_EXT_ID}" ]]; then
   ORIGINS_JSON="${ORIGINS_JSON},
     \"chrome-extension://${CUSTOM_EXT_ID}/\""
 fi
@@ -144,3 +153,6 @@ echo "✓ Setup complete!"
 echo "  Allowed Extension IDs:"
 echo "    - ${KEY_EXT_ID} (manifest key ID)"
 echo "    - ${PATH_EXT_ID} (unpacked folder ID)"
+if [[ "${CHROME_STORE_EXT_ID}" =~ ^[a-p]{32}$ ]]; then
+  echo "    - ${CHROME_STORE_EXT_ID} (Chrome Web Store ID)"
+fi

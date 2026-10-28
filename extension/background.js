@@ -35,6 +35,18 @@ function withSessionLock(fn) {
 const autoOpenTimers = new Map();
 
 /**
+ * webRequest dinleyicisini Chromium'da "extraHeaders" ile (Referer/Origin görünür olsun diye) kaydeder.
+ * Firefox bu seçeneği tanımaz ve addListener hata fırlatır; bu durumda seçeneksiz kaydeder.
+ */
+function addWebRequestListener(event, listener, filter, extraInfoSpec) {
+  try {
+    event.addListener(listener, filter, [...extraInfoSpec, "extraHeaders"]);
+  } catch {
+    event.addListener(listener, filter, extraInfoSpec);
+  }
+}
+
+/**
  * HTTP başlıklarında satır sonu / kontrol karakteri olup olmadığını denetler.
  */
 function sanitizeHeaderValue(val) {
@@ -432,7 +444,8 @@ async function scheduleAutoOpenIfEnabled(tabId) {
 /**
  * webRequest.onSendHeaders: İstek URL'sini, Referer ve User-Agent başlıklarını requestId ile yakalar.
  */
-chrome.webRequest.onSendHeaders.addListener(
+addWebRequestListener(
+  chrome.webRequest.onSendHeaders,
   async (details) => {
     if (details.tabId < 0) return;
     if (!isValidHttpUrl(details.url)) return;
@@ -501,7 +514,7 @@ chrome.webRequest.onSendHeaders.addListener(
     }
   },
   { urls: ["http://*/*", "https://*/*"] },
-  ["requestHeaders", "extraHeaders"]
+  ["requestHeaders"]
 );
 
 /**
@@ -589,7 +602,8 @@ chrome.webRequest.onBeforeRedirect?.addListener(
  * webRequest.onHeadersReceived: Response Content-Type ve Content-Length başlıklarını okur,
  * requestId üzerinden onSendHeaders ile ilişkilendirir.
  */
-chrome.webRequest.onHeadersReceived.addListener(
+addWebRequestListener(
+  chrome.webRequest.onHeadersReceived,
   async (details) => {
     if (details.tabId < 0) return;
     if (!isValidHttpUrl(details.url)) return;
@@ -662,7 +676,7 @@ chrome.webRequest.onHeadersReceived.addListener(
     });
   },
   { urls: ["http://*/*", "https://*/*"] },
-  ["responseHeaders", "extraHeaders"]
+  ["responseHeaders"]
 );
 
 /**

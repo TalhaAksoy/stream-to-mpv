@@ -124,7 +124,7 @@ Running `make` automatically:
 
 1. **DRM-Protected Streams (Netflix, Disney+, Spotify, etc.):** Widevine / FairPlay encrypted streams cannot be played in external players; the extension detects them and displays an `Unsupported stream (DRM)` notice.
 2. **Android Intent HTTP Header Limitation:** Official `mpv-android` (`is.xyz.mpv`) does not yet parse custom `Referer` or `User-Agent` headers from Android `ACTION_VIEW` Intents (`TODO` in upstream `MPVActivity.kt`). **YouTube, Mail.ru, Sibnet, Dailymotion, Tau, and GDrive** play directly on Android out-of-the-box, and **VK / OK.ru** work once a browser `user-agent` is set in `mpv.conf` (see Step 6 above). Strict `Referer`-locked embed CDNs (e.g., Alucard / Vidmoly) may still return `403` on Android (all of them work seamlessly on macOS where full headers are passed).
-3. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and `--no-config` safety checks, rejects CRLF header injection, and validates caller `allowed_origins`.
+3. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and a `--` argument separator, rejects CRLF header injection, and validates caller `allowed_origins`.
 
 ---
 
@@ -144,6 +144,9 @@ make zip
 
 # Rebuild macOS installer package (dist/StreamToMpv-Installer.pkg)
 make pkg
+
+# Build Chrome Web Store & Firefox AMO upload packages (dist/store/*.zip) and lint the Firefox one
+make store
 ```
 
 ---
@@ -156,6 +159,9 @@ make pkg
 ├── Install Stream to mpv.command   # Double-clickable macOS Finder installer
 ├── README.md                       # English documentation
 ├── README.tr.md                    # Turkish documentation (Türkçe rehber)
+├── PRIVACY.md                      # Privacy policy (used for store listings)
+├── LICENSE                         # MIT License
+├── tools/build_store_zips.sh       # Chrome Web Store & Firefox AMO package builder
 ├── dist/
 │   ├── StreamToMpv-Installer.pkg   # Distributable macOS installer package
 │   └── stream-to-mpv-extension.zip # Ready-to-load mobile extension archive
@@ -174,3 +180,9 @@ make pkg
 ├── android/                        # Optional Kotlin Share-Intent companion app for standard Android browsers
 └── tests/                          # Unit, lifecycle, security & real mpv + strict-Referer HLS E2E tests
 ```
+
+---
+
+## License
+
+[MIT](./LICENSE) · [Privacy Policy](./PRIVACY.md)

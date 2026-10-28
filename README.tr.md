@@ -144,6 +144,9 @@ make zip
 
 # Dağıtılabilir macOS kurulum paketini (dist/StreamToMpv-Installer.pkg) yeniden oluştur
 make pkg
+
+# Chrome Web Store ve Firefox AMO yükleme paketlerini (dist/store/*.zip) üret ve Firefox paketini denetle
+make store
 ```
 
 ---
@@ -156,6 +159,9 @@ make pkg
 ├── Install Stream to mpv.command   # Finder'dan çift tıklamayla çalışan macOS kurulum betiği
 ├── README.md                       # İngilizce dokümantasyon (varsayılan)
 ├── README.tr.md                    # Türkçe dokümantasyon
+├── PRIVACY.md                      # Gizlilik politikası (mağaza sayfaları için)
+├── LICENSE                         # MIT Lisansı
+├── tools/build_store_zips.sh       # Chrome Web Store ve Firefox AMO paket üreticisi
 ├── dist/
 │   ├── StreamToMpv-Installer.pkg   # Standart macOS kurulum paketi
 │   └── stream-to-mpv-extension.zip # Android tarayıcılar için hazır eklenti arşivi
@@ -174,3 +180,9 @@ make pkg
 ├── android/                        # Standart Android tarayıcılar için isteğe bağlı Share Intent Kotlin uygulaması
 └── tests/                          # Otomatik birim, yaşam döngüsü, güvenlik ve gerçek mpv E2E testleri
 ```
+
+---
+
+## Lisans
+
+[MIT](./LICENSE) · [Gizlilik Politikası](./PRIVACY.md)

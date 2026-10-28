@@ -4,10 +4,11 @@
 #   make install  -> Sadece kurulum ve doğrulama yapar.
 #   make zip      -> Android (Bare / Lemur / Mises) için dist/stream-to-mpv-extension.zip üretir.
 #   make test     -> Tüm birim ve entegrasyon testlerini çalıştırır.
+#   make store    -> Chrome Web Store ve Firefox AMO için dist/store/*.zip üretir.
 #   make pkg      -> (Yalnızca macOS) Dağıtılabilir .pkg kurulum paketini üretir.
 
 SHELL := /bin/bash
-.PHONY: all install deps host verify zip test pkg clean
+.PHONY: all install deps host verify zip store test pkg clean
 
 all: install zip
 
@@ -66,6 +67,9 @@ zip:
 	@rm -f dist/stream-to-mpv-extension.zip
 	@(cd extension && zip -rq ../dist/stream-to-mpv-extension.zip . -x "*.DS_Store")
 	@echo "  -> Mobile extension archive ready: dist/stream-to-mpv-extension.zip"
+
+store:
+	@./tools/build_store_zips.sh
 
 clean:
 	@rm -rf dist/pkg_build
