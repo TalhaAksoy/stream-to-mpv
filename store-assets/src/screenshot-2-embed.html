@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screenshot 2 — Embedded players</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  body { width: 1280px; height: 800px; }
+  .stage { width: 1280px; height: 800px; position: relative; }
+  header { position: absolute; left: 0; right: 0; top: 46px; text-align: center; }
+  h1 { font-size: 40px; font-weight: 800; letter-spacing: -0.8px; }
+  header p { margin-top: 10px; font-size: 18px; color: var(--muted); }
+  .browser { position: absolute; left: 50px; top: 170px; width: 720px; height: 530px; }
+  .page { padding: 22px 24px; }
+  .crumbs { font-size: 12px; color: var(--muted); }
+  .ep-title { margin-top: 6px; font-size: 20px; font-weight: 700; }
+  .embed {
+    margin-top: 16px; width: 672px; height: 378px; border-radius: 10px;
+    border: 1px solid #2a3042;
+  }
+  .embed .scene { filter: hue-rotate(-28deg) saturate(1.1); }
+  .big-play {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 74px; height: 74px; border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45); border: 2px solid rgba(255, 255, 255, 0.75);
+    display: grid; place-items: center;
+  }
+  .big-play svg { width: 34px; height: 34px; fill: #fff; margin-left: 4px; }
+  .embed-brand { position: absolute; left: 14px; top: 12px; font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.8); letter-spacing: 0.4px; }
+  .floating { position: absolute; right: 14px; bottom: 14px; }
+  .toast-pos { right: 14px; bottom: 58px; }
+  .servers { margin-top: 14px; display: flex; gap: 8px; }
+  .servers span { font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 7px; background: #202534; color: var(--muted); border: 1px solid var(--border); }
+  .servers span.on { color: #fff; border-color: rgba(165, 106, 245, 0.6); background: rgba(129, 71, 213, 0.25); }
+
+  .mpv-window { position: absolute; left: 812px; top: 236px; width: 420px; height: 270px; }
+  .mpv-window .video { height: 236px; }
+  .mpv-window .mpv-osc { width: 86%; height: 44px; bottom: 12px; }
+  .mpv-window .scene { filter: hue-rotate(-28deg) saturate(1.1); }
+
+  .chips { position: absolute; left: 812px; top: 560px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  .arrow { position: absolute; left: 0; top: 0; width: 1280px; height: 800px; pointer-events: none; }
+  .chip { font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 999px; background: rgba(26, 30, 43, 0.9); border: 1px solid var(--border); color: #dcd0f5; }
+  .chip b { color: var(--violet-1); }
+</style>
+</head>
+<body>
+<div class="stage glow-bg">
+  <header>
+    <h1>Works in embedded players too</h1>
+    <p>Finds the real HLS / MP4 stream inside iframes and passes the headers the video server needs.</p>
+  </header>
+
+
+  <div class="browser">
+    <div class="browser-bar">
+      <div class="dots"><i></i><i></i><i></i></div>
+      <div class="url">series.example.net/show/episode-7</div>
+      <div class="ext-icon"><img src="../../extension/icons/icon-48.png" alt=""><b>2</b></div>
+    </div>
+    <div class="page">
+      <div class="crumbs">Home › Series › Season 1</div>
+      <div class="ep-title">Episode 7 — The Long Evening</div>
+      <div class="embed video">
+        <img class="scene" src="scene.svg" alt="">
+        <div class="embed-brand">EMBED PLAYER</div>
+        <div class="big-play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        <div class="mpv-toast toast-pos">Opening in mpv (1080p)</div>
+        <div class="floating">
+          <div class="mpv-root">
+            <button class="mpv-trigger hover">
+              <svg class="mpv-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+              <span class="mpv-badge">mpv</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mpv-window">
+    <div class="mpv-titlebar"><div class="dots"><i></i><i></i><i></i></div>master.m3u8 - mpv</div>
+    <div class="video">
+      <img class="scene" src="scene.svg" alt="">
+      <div class="mpv-osc">
+        <svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+        <span>18:40</span>
+        <div class="bar"><span></span></div>
+        <span>47:12</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="chips">
+    <div class="chip"><b>HLS</b> master playlists · <b>MP4</b> · <b>WebM</b></div>
+    <div class="chip">OK.ru · VK · Mail.ru · Sibnet · Dailymotion</div>
+    <div class="chip">Referer / User-Agent passed to mpv</div>
+  </div>
+
+  <svg class="arrow" viewBox="0 0 1280 800">
+    <defs>
+      <marker id="head" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0L10 5L0 10z" fill="#a56af5"/>
+      </marker>
+    </defs>
+    <path d="M748 672 C 800 660, 790 560, 860 516" fill="none" stroke="#a56af5" stroke-width="2.5" stroke-dasharray="6 6" marker-end="url(#head)"/>
+  </svg>
+</div>
+</body>
+</html>

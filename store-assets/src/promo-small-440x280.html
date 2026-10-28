@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Promo tile 440x280</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  body { width: 440px; height: 280px; }
+  .tile {
+    width: 440px; height: 280px; position: relative; overflow: hidden;
+    background:
+      radial-gradient(320px 220px at 100% 0%, rgba(165, 106, 245, 0.55), transparent 70%),
+      radial-gradient(300px 220px at 0% 100%, rgba(80, 36, 144, 0.7), transparent 70%),
+      #12101c;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  }
+  .row { display: flex; align-items: center; gap: 16px; }
+  .logo { width: 84px; height: 84px; filter: drop-shadow(0 10px 24px rgba(129, 71, 213, 0.55)); }
+  .name { font-size: 34px; font-weight: 800; letter-spacing: -0.8px; line-height: 1; }
+  .tag { font-size: 15px; color: #cfc3e8; font-weight: 500; margin-top: 7px; }
+  .demo { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #a99dc4; font-weight: 600; }
+  .demo .mpv-trigger { background: rgba(0, 0, 0, 0.55); height: 32px; min-height: 32px; border-radius: 8px; opacity: 1; }
+</style>
+</head>
+<body>
+<div class="tile">
+  <div class="row">
+    <img class="logo" src="../../extension/icons/logo.svg" alt="">
+    <div>
+      <div class="name">Stream to mpv</div>
+      <div class="tag">Play any web video in mpv</div>
+    </div>
+  </div>
+  <div class="demo">
+    <span>HLS · MP4 · YouTube</span>
+    <button class="mpv-trigger">
+      <svg class="mpv-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+      <span class="mpv-badge">mpv</span>
+    </button>
+  </div>
+</div>
+</body>
+</html>

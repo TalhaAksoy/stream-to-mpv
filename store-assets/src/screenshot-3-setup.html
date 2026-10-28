@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screenshot 3 — Setup</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  body { width: 1280px; height: 800px; }
+  .stage { width: 1280px; height: 800px; position: relative; }
+  header { position: absolute; left: 0; right: 0; top: 46px; text-align: center; }
+  h1 { font-size: 40px; font-weight: 800; letter-spacing: -0.8px; }
+  header p { margin-top: 10px; font-size: 18px; color: var(--muted); }
+
+  .cols { position: absolute; left: 80px; right: 80px; top: 172px; display: flex; gap: 28px; }
+  .col { background: rgba(26, 30, 43, 0.82); border: 1px solid var(--border); border-radius: 16px; padding: 26px 28px; }
+  .col.desktop { width: 700px; }
+  .col.android { flex: 1; }
+  .col h2 { font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+  .col h2 small { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: rgba(129, 71, 213, 0.28); color: #d9c4ff; border: 1px solid rgba(165, 106, 245, 0.45); }
+
+  .step { display: flex; gap: 14px; margin-top: 20px; }
+  .num {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    display: grid; place-items: center; font-size: 14px; font-weight: 800;
+    background: linear-gradient(135deg, var(--violet-1), var(--violet-3)); color: #fff;
+  }
+  .step-body { flex: 1; min-width: 0; }
+  .step-title { font-size: 16px; font-weight: 700; margin-top: 4px; }
+  .step-desc { font-size: 13.5px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+
+  .term {
+    margin-top: 10px; background: #0a0c11; border: 1px solid #252a39; border-radius: 10px;
+    padding: 12px 14px; font-size: 13px; line-height: 1.65; color: #d6dbe6;
+  }
+  .term .p { color: var(--violet-1); }
+  .term .c { color: #6b7387; }
+  .term .ok { color: var(--green); }
+
+  .note {
+    margin-top: 22px; font-size: 13px; color: var(--muted); line-height: 1.5;
+    padding: 12px 14px; border-radius: 10px; background: rgba(255, 255, 255, 0.03); border: 1px dashed var(--border);
+  }
+  .note b { color: var(--text); }
+
+  .browsers { position: absolute; left: 80px; right: 80px; top: 650px; text-align: center; }
+  .browsers .label { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0.6px; text-transform: uppercase; }
+  .browsers .list { margin-top: 14px; display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; }
+  .browsers .list span { font-size: 14px; font-weight: 600; padding: 8px 14px; border-radius: 999px; background: rgba(26, 30, 43, 0.9); border: 1px solid var(--border); color: #dcd0f5; }
+
+  .mini-btn { display: inline-flex; vertical-align: middle; background: #000; border-radius: 6px; padding: 3px 6px; gap: 4px; align-items: center; }
+  .mini-btn .mpv-icon { width: 16px; height: 16px; }
+  .mini-btn .mpv-badge { font-size: 10px; }
+</style>
+</head>
+<body>
+<div class="stage glow-bg">
+  <header>
+    <h1>Quick one-time setup</h1>
+    <p>Browsers can't start apps on their own, so desktop needs a small open-source helper.</p>
+  </header>
+
+  <div class="cols">
+    <div class="col desktop">
+      <h2>Desktop <small>Linux &amp; macOS</small></h2>
+
+      <div class="step">
+        <div class="num">1</div>
+        <div class="step-body">
+          <div class="step-title">Install mpv and yt-dlp</div>
+          <div class="term mono">
+            <div><span class="c"># Linux</span></div>
+            <div><span class="p">$</span> sudo pacman -S mpv yt-dlp</div>
+            <div><span class="c"># macOS</span></div>
+            <div><span class="p">$</span> brew install mpv yt-dlp</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="num">2</div>
+        <div class="step-body">
+          <div class="step-title">Install the helper</div>
+          <div class="term mono">
+            <div><span class="p">$</span> git clone https://github.com/TalhaAksoy/stream-to-mpv</div>
+            <div><span class="p">$</span> cd stream-to-mpv &amp;&amp; make</div>
+            <div class="ok">  -> Clean GUI environment test OK &amp; mpv ready!</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="num">3</div>
+        <div class="step-body">
+          <div class="step-title">Restart the browser and click
+            <span class="mini-btn"><svg class="mpv-icon" viewBox="0 0 24 24" fill="#fff"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg><span class="mpv-badge">mpv</span></span>
+            on any video</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col android">
+      <h2>Android <span class="pill">no helper needed</span></h2>
+
+      <div class="step">
+        <div class="num">1</div>
+        <div class="step-body">
+          <div class="step-title">Install mpv-android</div>
+          <div class="step-desc">From Google Play, F-Droid or GitHub<br>(package <span class="mono">is.xyz.mpv</span>).</div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="num">2</div>
+        <div class="step-body">
+          <div class="step-title">Tap ▶ mpv on a video</div>
+          <div class="step-desc">The stream opens straight in mpv-android. YouTube works without yt-dlp.</div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Private by design.</b> No tracking or analytics. Stream URLs go only to mpv on your own device.
+      </div>
+    </div>
+  </div>
+
+  <div class="browsers">
+    <div class="label">Works with</div>
+    <div class="list">
+      <span>Firefox</span><span>Chrome</span><span>Chromium</span><span>Brave</span><span>Edge</span><span>Vivaldi</span><span>Firefox for Android</span><span>Lemur · Mises (Android)</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

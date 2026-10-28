@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screenshot 1 — Resolution menu</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  body { width: 1280px; height: 800px; }
+  .stage { width: 1280px; height: 800px; position: relative; }
+  header { position: absolute; left: 0; right: 0; top: 46px; text-align: center; }
+  h1 { font-size: 40px; font-weight: 800; letter-spacing: -0.8px; }
+  header p { margin-top: 10px; font-size: 18px; color: var(--muted); }
+  .browser { position: absolute; left: 80px; top: 170px; width: 1120px; height: 600px; }
+  .page { display: flex; gap: 24px; padding: 24px; }
+  .main { width: 748px; }
+  .player { width: 748px; height: 421px; border-radius: 10px; }
+  .title { margin-top: 16px; font-size: 19px; font-weight: 700; }
+  .meta { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .side { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+  .thumb-row { display: flex; gap: 10px; }
+  .thumb { width: 128px; height: 72px; border-radius: 8px; background: #252a39; flex-shrink: 0; overflow: hidden; position: relative; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0.55; filter: saturate(0.6) hue-rotate(var(--h, 0deg)); }
+  .lines { flex: 1; padding-top: 4px; }
+  .lines i { display: block; height: 9px; border-radius: 5px; background: #2a3042; margin-bottom: 8px; }
+  .lines i:nth-child(2) { width: 70%; }
+  .lines i:nth-child(3) { width: 45%; background: #222736; }
+  .menu-pos { right: 146px; bottom: 64px; width: 212px; }
+</style>
+</head>
+<body>
+<div class="stage glow-bg">
+  <header>
+    <h1>Watch any web video in <span class="accent">mpv</span></h1>
+    <p>Click <b>▶ mpv</b> in the player, pick a resolution, and the stream opens in your mpv player.</p>
+  </header>
+
+  <div class="browser">
+    <div class="browser-bar">
+      <div class="dots"><i></i><i></i><i></i></div>
+      <div class="url">videos.example.com/watch/sunset-timelapse</div>
+      <div class="ext-icon"><img src="../../extension/icons/icon-48.png" alt=""><b>3</b></div>
+    </div>
+    <div class="page">
+      <div class="main">
+        <div class="player video">
+          <img class="scene" src="scene.svg" alt="">
+          <div class="controls">
+            <div class="progress"><span></span></div>
+            <div class="ctrl-row">
+              <div class="ctrl-left">
+                <div class="ctrl-btn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+                <div class="ctrl-btn"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></div>
+                <div class="ctrl-btn"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg></div>
+                <span class="time">4:12 / 11:05</span>
+              </div>
+              <div class="ctrl-right">
+                <div class="mpv-root">
+                  <button class="mpv-trigger hover">
+                    <svg class="mpv-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+                    <span class="mpv-badge">mpv</span>
+                  </button>
+                </div>
+                <div class="ctrl-btn"><svg viewBox="0 0 24 24"><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/></svg></div>
+                <div class="ctrl-btn"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></div>
+                <div class="ctrl-btn"><svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></div>
+              </div>
+            </div>
+          </div>
+          <div class="mpv-menu menu-pos">
+            <div class="mpv-menu-header">Open in mpv</div>
+            <div class="mpv-item"><span>Auto (Best Quality)</span><span class="mpv-item-tag">BEST</span></div>
+            <div class="mpv-item"><span>2160p</span><span class="mpv-item-tag">4K</span></div>
+            <div class="mpv-item hover"><span>1080p</span><span class="mpv-item-tag">HD</span></div>
+            <div class="mpv-item"><span>720p</span><span class="mpv-item-tag">HD</span></div>
+            <div class="mpv-item"><span>480p</span></div>
+            <div class="mpv-item"><span>Audio Only</span><span class="mpv-item-tag">MP3/AAC</span></div>
+          </div>
+        </div>
+        <div class="title">Sunset Timelapse over the Lake — 4K Sample</div>
+        <div class="meta">Sample Channel · 12K views</div>
+      </div>
+      <div class="side">
+        <div class="thumb-row"><div class="thumb"><img src="scene.svg" alt=""></div><div class="lines"><i></i><i></i><i></i></div></div>
+        <div class="thumb-row"><div class="thumb" style="--h:60deg"><img src="scene.svg" alt=""></div><div class="lines"><i></i><i></i><i></i></div></div>
+        <div class="thumb-row"><div class="thumb" style="--h:150deg"><img src="scene.svg" alt=""></div><div class="lines"><i></i><i></i><i></i></div></div>
+        <div class="thumb-row"><div class="thumb" style="--h:230deg"><img src="scene.svg" alt=""></div><div class="lines"><i></i><i></i><i></i></div></div>
+        <div class="thumb-row"><div class="thumb" style="--h:300deg"><img src="scene.svg" alt=""></div><div class="lines"><i></i><i></i><i></i></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

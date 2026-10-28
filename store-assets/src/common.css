@@ -1,0 +1,189 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=block");
+
+:root {
+  --bg: #0d0f15;
+  --bg-2: #141722;
+  --card: #1a1e2b;
+  --border: #2a3042;
+  --text: #f0f3f8;
+  --muted: #9ba3b5;
+  --violet-1: #a56af5;
+  --violet-2: #8147d5;
+  --violet-3: #502490;
+  --green: #2ecc71;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", "Noto Sans", "Fira Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono { font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; }
+
+.glow-bg {
+  background:
+    radial-gradient(900px 520px at 85% -10%, rgba(129, 71, 213, 0.38), transparent 60%),
+    radial-gradient(700px 480px at -10% 110%, rgba(80, 36, 144, 0.45), transparent 60%),
+    var(--bg);
+}
+
+.logo { display: block; }
+
+.accent { color: var(--violet-1); }
+
+/* ---------- Browser window mock ---------- */
+.browser {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+.browser-bar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  background: #1b1f2c;
+  border-bottom: 1px solid var(--border);
+}
+.dots { display: flex; gap: 8px; }
+.dots i { width: 12px; height: 12px; border-radius: 50%; background: #3a4053; display: block; }
+.dots i:nth-child(1) { background: #ff5f57; }
+.dots i:nth-child(2) { background: #febc2e; }
+.dots i:nth-child(3) { background: #28c840; }
+.url {
+  flex: 1;
+  height: 28px;
+  border-radius: 8px;
+  background: #11141d;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+}
+.ext-icon {
+  width: 26px; height: 26px; border-radius: 6px;
+  display: grid; place-items: center;
+  position: relative;
+}
+.ext-icon img { width: 20px; height: 20px; }
+.ext-icon b {
+  position: absolute; right: -4px; bottom: -3px;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  padding: 2px 3px; border-radius: 4px;
+  background: #6c3483; color: #fff;
+}
+
+/* ---------- Video frame art (neutral, generated) ---------- */
+.video {
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+.video .scene { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* ---------- Generic player controls ---------- */
+.controls {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 0 14px 6px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+}
+.progress { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.25); position: relative; margin: 26px 0 6px; }
+.progress span { position: absolute; left: 0; top: 0; bottom: 0; width: 38%; background: #ff3b30; border-radius: 2px; }
+.progress span::after { content: ""; position: absolute; right: -6px; top: -4px; width: 12px; height: 12px; border-radius: 50%; background: #ff3b30; }
+.ctrl-row { height: 40px; display: flex; align-items: center; justify-content: space-between; color: #fff; }
+.ctrl-left, .ctrl-right { display: flex; align-items: center; gap: 4px; height: 100%; }
+.ctrl-btn { width: 40px; height: 40px; display: grid; place-items: center; opacity: 0.92; }
+.ctrl-btn svg { width: 24px; height: 24px; fill: #fff; }
+.time { font-size: 13px; margin-left: 6px; opacity: 0.95; }
+
+/* ---------- Real extension widget CSS (copied from extension/content.js) ---------- */
+.mpv-root { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 100%; }
+.mpv-trigger {
+  appearance: none; background: transparent; border: none; color: #ffffff; cursor: pointer;
+  height: 100%; min-height: 36px; padding: 0 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  opacity: 0.9; border-radius: 8px; font-family: inherit;
+}
+.mpv-trigger.hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
+.floating .mpv-trigger {
+  background: rgba(15, 17, 23, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+  border-radius: 999px; padding: 0 12px; height: 34px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  opacity: 1;
+}
+.floating .mpv-trigger.hover { background: rgba(142, 68, 173, 0.92); border-color: rgba(255, 255, 255, 0.45); }
+.mpv-icon { width: 20px; height: 20px; fill: currentColor; flex-shrink: 0; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
+.mpv-badge {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.2px; padding: 2px 5px; border-radius: 4px;
+  background: rgba(155, 89, 182, 0.92); color: #ffffff; line-height: 1;
+}
+.mpv-menu {
+  box-sizing: border-box; position: absolute;
+  min-width: 188px; max-width: 268px;
+  background: rgba(20, 22, 29, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px; padding: 6px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+  color: #f0f3f8;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.mpv-menu-header {
+  font-size: 11px; font-weight: 700; color: #9ba3b5; padding: 5px 10px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 2px;
+}
+.mpv-item {
+  color: #f0f3f8; font-size: 12.5px; font-weight: 500;
+  padding: 8px 10px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.mpv-item.hover { background: rgba(155, 89, 182, 0.35); }
+.mpv-item-tag {
+  font-size: 10px; font-weight: 700; color: #d7bde2; background: rgba(142, 68, 173, 0.35);
+  padding: 1px 5px; border-radius: 4px;
+}
+.mpv-toast {
+  position: absolute; white-space: nowrap;
+  padding: 6px 11px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  background: rgba(20, 68, 43, 0.95);
+  border: 1px solid rgba(46, 204, 113, 0.55);
+  color: #abebc6;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- mpv window mock ---------- */
+.mpv-window {
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #333a4d;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+.mpv-titlebar {
+  height: 34px; background: #202228; color: #c9ccd4; font-size: 12.5px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; position: relative;
+}
+.mpv-titlebar .dots { position: absolute; left: 12px; }
+.mpv-titlebar .dots i { width: 11px; height: 11px; }
+.mpv-osc {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  width: 72%; height: 54px; border-radius: 10px;
+  background: rgba(20, 20, 20, 0.72);
+  display: flex; align-items: center; gap: 14px; padding: 0 16px; color: #fff; font-size: 12px;
+}
+.mpv-osc .bar { flex: 1; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.25); position: relative; }
+.mpv-osc .bar span { position: absolute; inset: 0 auto 0 0; width: 38%; background: #fff; border-radius: 3px; }
+.mpv-osc svg { width: 20px; height: 20px; fill: #fff; }
