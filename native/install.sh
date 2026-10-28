@@ -28,7 +28,7 @@ print("".join(chr(ord("a") + int(c, 16)) for c in h))
 
 # 3. Chrome Web Store'dan kurulan eklentinin ID'si (mağaza "key" alanını kabul etmediği için farklıdır).
 #    Yayınlandıktan sonra Developer Dashboard'daki Item ID buraya yazılmalıdır.
-CHROME_STORE_EXT_ID=""
+CHROME_STORE_EXT_ID="cclgdinilniikloipfhflcchjohjcbpk"
 
 # 4. İsteğe bağlı olarak komut satırından verilen ek Extension ID
 CUSTOM_EXT_ID="${1:-}"
