@@ -36,7 +36,16 @@
 | **yt-dlp** | Recommended | For YouTube/Twitch/MSE sites (`make` auto-installs `brew install yt-dlp`) |
 | **deno** *(Optional)* | Recommended | Speeds up `yt-dlp` YouTube JS challenge solving (`brew install deno`) |
 
-### 2. Android (Phone / Tablet — Android 8.0+)
+### 2. Desktop (Linux)
+
+| Component | Status | Notes |
+| :--- | :--- | :--- |
+| **Browser** | Required | Chromium, Google Chrome, Brave, Microsoft Edge, Vivaldi, Thorium, Firefox, or LibreWolf |
+| **Python 3** | Required | `python3` from your distribution |
+| **mpv** | Required | Install with your package manager (`sudo pacman -S mpv`, `sudo apt install mpv`, …) |
+| **yt-dlp** | Recommended | For YouTube/Twitch/MSE sites (`sudo pacman -S yt-dlp` or `pipx install yt-dlp`) |
+
+### 3. Android (Phone / Tablet — Android 8.0+)
 
 | Component | Status | Notes |
 | :--- | :--- | :--- |
@@ -79,7 +88,17 @@ Running `make` automatically:
 
 ---
 
-### B. Android Setup (Bare Browser / Lemur / Mises)
+### B. Linux Setup
+
+1. Install `mpv` (and optionally `yt-dlp`) with your package manager — `make` does **not** run `sudo` for you; it only warns if they are missing.
+2. Run `make` inside the cloned repository. It installs the host to `~/mpv_host/mpv_host.py` and registers Native Messaging manifests under `~/.config/<browser>/NativeMessagingHosts` (respecting `$XDG_CONFIG_HOME`), `~/.mozilla/native-messaging-hosts`, and `~/.librewolf/native-messaging-hosts`.
+3. Load the **`extension`** folder via **Load unpacked** in `chrome://extensions` (same as Step 2 above).
+
+> **Note:** Flatpak/Snap browsers are sandboxed and cannot launch host programs from your home directory; use a natively packaged browser.
+
+---
+
+### C. Android Setup (Bare Browser / Lemur / Mises)
 
 1. Install **[mpv-android](https://play.google.com/store/apps/details?id=is.xyz.mpv)** (`is.xyz.mpv`) on your phone.
 2. Install an extension-capable Android browser (Recommended: **Bare Browser**, **Lemur Browser**, or **Mises Browser**).
@@ -147,7 +166,7 @@ make pkg
 │   ├── stream_utils.js             # HLS Master (#EXT-X-STREAM-INF) parser & stream prioritization
 │   ├── popup.html                  # Compact status & settings popup
 │   └── popup.js                    # Popup controller
-├── native/                         # macOS Native Messaging Host
+├── native/                         # macOS & Linux Native Messaging Host
 │   ├── mpv_host.py                 # Hardened Python 3 mpv & yt-dlp launcher (com.talha.mpv)
 │   ├── install.sh                  # Zero-config multi-browser manifest installer
 │   ├── build_macos_pkg.sh          # macOS .pkg builder

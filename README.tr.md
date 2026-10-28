@@ -36,7 +36,16 @@
 | **yt-dlp** | Önerilen | YouTube/Twitch gibi MSE siteleri için (`make` eksikse otomatik kurar: `brew install yt-dlp`) |
 | **deno** *(İsteğe bağlı)* | Önerilen | Güncel `yt-dlp` sürümlerinin YouTube JS imzalarını hızlı çözmesi için (`brew install deno`) |
 
-### 2. Android (Telefon / Tablet — Android 8.0+)
+### 2. Bilgisayar (Linux)
+
+| Bileşen | Durum | Notlar |
+| :--- | :--- | :--- |
+| **Tarayıcı** | Zorunlu | Chromium, Google Chrome, Brave, Microsoft Edge, Vivaldi, Thorium, Firefox veya LibreWolf |
+| **Python 3** | Zorunlu | Dağıtımınızın `python3` paketi |
+| **mpv** | Zorunlu | Paket yöneticinizle kurun (`sudo pacman -S mpv`, `sudo apt install mpv`, …) |
+| **yt-dlp** | Önerilen | YouTube/Twitch gibi MSE siteleri için (`sudo pacman -S yt-dlp` veya `pipx install yt-dlp`) |
+
+### 3. Android (Telefon / Tablet — Android 8.0+)
 
 | Bileşen | Durum | Açıklama |
 | :--- | :--- | :--- |
@@ -79,7 +88,17 @@ make
 
 ---
 
-### B. Android Kurulumu (Bare Browser / Lemur / Mises)
+### B. Linux Kurulumu
+
+1. `mpv` (ve isteğe bağlı olarak `yt-dlp`) paketini paket yöneticinizle kurun — `make` sizin yerinize `sudo` çalıştırmaz, yalnızca eksikse uyarır.
+2. Klonladığınız klasörde `make` çalıştırın. Host betiği `~/mpv_host/mpv_host.py` konumuna kurulur; Native Messaging manifestleri `~/.config/<tarayıcı>/NativeMessagingHosts` (`$XDG_CONFIG_HOME` dikkate alınır), `~/.mozilla/native-messaging-hosts` ve `~/.librewolf/native-messaging-hosts` altına yazılır.
+3. `chrome://extensions` sayfasında **Load unpacked** ile **`extension`** klasörünü yükleyin (yukarıdaki 2. Adım ile aynı).
+
+> **Not:** Flatpak/Snap tarayıcılar sandbox içinde çalıştığı için ev dizinindeki host programını başlatamaz; dağıtımın kendi paketiyle kurulmuş bir tarayıcı kullanın.
+
+---
+
+### C. Android Kurulumu (Bare Browser / Lemur / Mises)
 
 1. Telefonunuza Google Play Store veya GitHub Releases üzerinden **[mpv-android](https://play.google.com/store/apps/details?id=is.xyz.mpv)** (`is.xyz.mpv`) uygulamasını yükleyin.
 2. Eklenti destekleyen bir Android tarayıcısı yükleyin (Önerilen: **Bare Browser**, **Lemur Browser** veya **Mises Browser**).
@@ -147,7 +166,7 @@ make pkg
 │   ├── stream_utils.js             # HLS Master (#EXT-X-STREAM-INF) ayrıştırma ve akış önceliklendirme
 │   ├── popup.html                  # Sade durum ve ayar penceresi
 │   └── popup.js                    # Popup mantığı
-├── native/                         # macOS Native Messaging Host
+├── native/                         # macOS & Linux Native Messaging Host
 │   ├── mpv_host.py                 # Güvenli Python 3 mpv & yt-dlp başlatıcısı (com.talha.mpv)
 │   ├── install.sh                  # Tüm Chromium/Firefox tarayıcılarını otomatik yapılandıran betik
 │   ├── build_macos_pkg.sh          # .pkg paket üretici

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# macOS Tek Adımlık Otomatik Native Messaging Host Kurulum Betiği
+# macOS & Linux Tek Adımlık Otomatik Native Messaging Host Kurulum Betiği
 #
 # Hem manifest.json içindeki sabit ortak anahtar ID'sini (haamijddaadhbhjfpblfloidmpglfmnk)
 # hem de eklenti klasörünün tam dosya yolundan (path hash) üretilen unpacked Extension ID'sini
@@ -65,15 +65,44 @@ FIREFOX_MANIFEST_CONTENT=$(cat <<EOF
 EOF
 )
 
-CHROMIUM_NM_DIR="${HOME}/Library/Application Support/Chromium/NativeMessagingHosts"
-CHROME_NM_DIR="${HOME}/Library/Application Support/Google/Chrome/NativeMessagingHosts"
-BRAVE_NM_DIR="${HOME}/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"
-EDGE_NM_DIR="${HOME}/Library/Application Support/Microsoft Edge/NativeMessagingHosts"
-VIVALDI_NM_DIR="${HOME}/Library/Application Support/Vivaldi/NativeMessagingHosts"
-ARC_NM_DIR="${HOME}/Library/Application Support/Arc/User Data/NativeMessagingHosts"
-OPERA_NM_DIR="${HOME}/Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts"
-CFT_NM_DIR="${HOME}/Library/Application Support/Google/Chrome for Testing/NativeMessagingHosts"
-FIREFOX_NM_DIR="${HOME}/Library/Application Support/Mozilla/NativeMessagingHosts"
+OS_NAME="$(uname -s)"
+
+# İşletim sistemine göre tarayıcıların NativeMessagingHosts dizinleri
+if [[ "${OS_NAME}" == "Darwin" ]]; then
+  APP_SUPPORT="${HOME}/Library/Application Support"
+  CHROMIUM_NM_DIRS=(
+    "${APP_SUPPORT}/Chromium/NativeMessagingHosts"
+    "${APP_SUPPORT}/Google/Chrome/NativeMessagingHosts"
+    "${APP_SUPPORT}/BraveSoftware/Brave-Browser/NativeMessagingHosts"
+    "${APP_SUPPORT}/Microsoft Edge/NativeMessagingHosts"
+    "${APP_SUPPORT}/Vivaldi/NativeMessagingHosts"
+    "${APP_SUPPORT}/Arc/User Data/NativeMessagingHosts"
+    "${APP_SUPPORT}/com.operasoftware.Opera/NativeMessagingHosts"
+    "${APP_SUPPORT}/Google/Chrome for Testing/NativeMessagingHosts"
+  )
+  FIREFOX_NM_DIRS=(
+    "${APP_SUPPORT}/Mozilla/NativeMessagingHosts"
+  )
+elif [[ "${OS_NAME}" == "Linux" ]]; then
+  CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+  CHROMIUM_NM_DIRS=(
+    "${CONFIG_HOME}/chromium/NativeMessagingHosts"
+    "${CONFIG_HOME}/google-chrome/NativeMessagingHosts"
+    "${CONFIG_HOME}/google-chrome-beta/NativeMessagingHosts"
+    "${CONFIG_HOME}/google-chrome-unstable/NativeMessagingHosts"
+    "${CONFIG_HOME}/BraveSoftware/Brave-Browser/NativeMessagingHosts"
+    "${CONFIG_HOME}/microsoft-edge/NativeMessagingHosts"
+    "${CONFIG_HOME}/vivaldi/NativeMessagingHosts"
+    "${CONFIG_HOME}/thorium/NativeMessagingHosts"
+  )
+  FIREFOX_NM_DIRS=(
+    "${HOME}/.mozilla/native-messaging-hosts"
+    "${HOME}/.librewolf/native-messaging-hosts"
+  )
+else
+  echo "ERROR: Unsupported operating system: ${OS_NAME} (macOS and Linux are supported)." >&2
+  exit 1
+fi
 
 echo "[1/3] Installing native host script to ${HOST_SCRIPT}..."
 cp "${SCRIPT_DIR}/mpv_host.py" "${HOST_SCRIPT}"
@@ -81,27 +110,21 @@ chmod 755 "${HOST_SCRIPT}"
 echo "${MANIFEST_CONTENT}" > "${HOST_DIR}/${HOST_NAME}.json"
 
 echo "[2/3] Configuring browser NativeMessagingHosts manifests..."
-for TARGET_DIR in \
-  "${CHROMIUM_NM_DIR}" \
-  "${CHROME_NM_DIR}" \
-  "${BRAVE_NM_DIR}" \
-  "${EDGE_NM_DIR}" \
-  "${VIVALDI_NM_DIR}" \
-  "${ARC_NM_DIR}" \
-  "${OPERA_NM_DIR}" \
-  "${CFT_NM_DIR}"; do
+for TARGET_DIR in "${CHROMIUM_NM_DIRS[@]}"; do
   mkdir -p "${TARGET_DIR}"
   echo "${MANIFEST_CONTENT}" > "${TARGET_DIR}/${HOST_NAME}.json"
   echo "  -> Configured: ${TARGET_DIR}/${HOST_NAME}.json"
 done
 
-mkdir -p "${FIREFOX_NM_DIR}"
-echo "${FIREFOX_MANIFEST_CONTENT}" > "${FIREFOX_NM_DIR}/${HOST_NAME}.json"
-echo "  -> Configured: ${FIREFOX_NM_DIR}/${HOST_NAME}.json"
+for TARGET_DIR in "${FIREFOX_NM_DIRS[@]}"; do
+  mkdir -p "${TARGET_DIR}"
+  echo "${FIREFOX_MANIFEST_CONTENT}" > "${TARGET_DIR}/${HOST_NAME}.json"
+  echo "  -> Configured: ${TARGET_DIR}/${HOST_NAME}.json"
+done
 
 echo "[3/3] Verifying mpv & yt-dlp..."
 MPV_FOUND=""
-for CANDIDATE in "$(command -v mpv 2>/dev/null || true)" "/opt/homebrew/bin/mpv" "/usr/local/bin/mpv" "/Applications/mpv.app/Contents/MacOS/mpv"; do
+for CANDIDATE in "$(command -v mpv 2>/dev/null || true)" "/opt/homebrew/bin/mpv" "/usr/local/bin/mpv" "/Applications/mpv.app/Contents/MacOS/mpv" "/usr/bin/mpv"; do
   if [[ -n "${CANDIDATE}" && -x "${CANDIDATE}" ]]; then
     MPV_FOUND="${CANDIDATE}"
     break
@@ -110,8 +133,10 @@ done
 
 if [[ -n "${MPV_FOUND}" ]]; then
   echo "  -> mpv found at: ${MPV_FOUND}"
+elif [[ "${OS_NAME}" == "Darwin" ]]; then
+  echo "  -> WARNING: mpv was not found. Run 'brew install mpv'"
 else
-  echo "  -> WARNING: mpv was not found. Run 'make install-deps' or 'brew install mpv'"
+  echo "  -> WARNING: mpv was not found. Install it with your package manager (e.g. 'sudo pacman -S mpv' or 'sudo apt install mpv')"
 fi
 
 echo ""

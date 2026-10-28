@@ -924,7 +924,7 @@ async function openStreamInMpv(streamRecord, options = {}) {
       ok: false,
       statusCode: isNotInstalled ? "NATIVE_HOST_NOT_INSTALLED" : "NATIVE_MESSAGING_ERROR",
       errorMessage: isNotInstalled
-        ? `Native host not installed or origin not allowed (${rawMsg}). Run native/install.sh with your Extension ID.`
+        ? `Native host not installed or origin not allowed (${rawMsg}). Run 'make' in the stream-to-mpv folder to install the native host.`
         : `Native host error: ${rawMsg}`,
       mightBeExpired
     };

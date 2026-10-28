@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-macOS Native Messaging Host (com.talha.mpv)
+macOS & Linux Native Messaging Host (com.talha.mpv)
 Chromium eklentisinden gelen doğrulanmış medya akışlarını harici mpv oynatıcısında başlatır.
 macOS sistem Python 3.9 (/usr/bin/python3) ve üzeri tüm sürümlerle %100 uyumludur.
 """
@@ -95,6 +95,20 @@ def load_allowed_origins() -> set[str]:
         home / "Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts/com.talha.mpv.json",
     ]
 
+    # Linux: XDG yapılandırma dizinindeki Chromium tabanlı tarayıcı manifestleri
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    for browser_dir in (
+        "chromium",
+        "google-chrome",
+        "google-chrome-beta",
+        "google-chrome-unstable",
+        "BraveSoftware/Brave-Browser",
+        "microsoft-edge",
+        "vivaldi",
+        "thorium",
+    ):
+        manifest_candidates.append(config_home / browser_dir / "NativeMessagingHosts/com.talha.mpv.json")
+
     env_manifest = os.environ.get("MPV_HOST_MANIFEST_PATH")
     if env_manifest:
         manifest_candidates.insert(0, Path(env_manifest))
@@ -158,11 +172,13 @@ def verify_caller_origin(argv: list[str]) -> tuple[bool, str]:
 def build_augmented_path() -> str:
     """
     macOS GUI uygulamalarının (Chromium/Chrome) kısıtlı PATH ortamına karşı
-    Apple Silicon (/opt/homebrew/bin) ve Intel (/usr/local/bin) Homebrew dizinlerini PATH'e ekler.
+    Apple Silicon (/opt/homebrew/bin) ve Intel (/usr/local/bin) Homebrew dizinlerini,
+    Linux'ta ise pip/pipx kurulumları için ~/.local/bin dizinini PATH'e ekler.
     """
     current_path = os.environ.get("PATH", "")
     path_parts = [p for p in current_path.split(os.pathsep) if p]
     extra_dirs = [
+        str(Path.home() / ".local/bin"),
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
         "/usr/local/bin",
