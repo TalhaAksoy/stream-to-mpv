@@ -2,6 +2,12 @@
   "manifest_version": 3,
   "name": "Stream to mpv",
   "version": "1.1.0",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "description": "One-click 'Open in mpv' button directly on HTML5 video players with automatic HLS/MP4 stream detection.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAraERnIJx71B9rdCtX6yL47Y03jvRyIuy4GPA2Yv6qk9sAZxpJAwKETMbhR+8pHS5FM+geVKPNDyQ3AYvjOxFJWS594YC4QKmUpyAeoBIcr5TdIdgHLdff6DjwlEkd2Ptqegaqv6nB35kMXBRSmTbPWSLbEEX0gfnxStrDzL+tod+Img9k40Y3PaF8pcasPx7WxMcvJXVF99EdHvasIHe3CcTYLRLmmY/ngqEvghG581J+5g5O8AEfDC9qCdE9yPAg6t3W7hT8TAQvIglrMFJGBimYpqGIdGNFozfLI+QEXHgiloaEpvm3W35B/KxfyEpDMGJ9pegp2g81mBS4x+T4wIDAQAB",
   "browser_specific_settings": {
@@ -41,6 +47,12 @@
     }
   ],
   "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
     "default_title": "Stream to mpv",
     "default_popup": "popup.html"
   }

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <title>Stream to mpv</title>
+  <desc>A white play symbol with three incoming stream lines on a rounded violet tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A56AF5"/>
+      <stop offset="0.48" stop-color="#8147D5"/>
+      <stop offset="1" stop-color="#502490"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="100" y1="32" x2="400" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="white" stop-opacity="0.04"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#tile)"/>
+  <rect x="25" y="25" width="462" height="462" rx="107" stroke="url(#edge)" stroke-width="2"/>
+  <path d="M143 198H184" stroke="white" stroke-opacity="0.65" stroke-width="24" stroke-linecap="round"/>
+  <path d="M119 256H184" stroke="white" stroke-width="24" stroke-linecap="round"/>
+  <path d="M143 314H184" stroke="white" stroke-opacity="0.65" stroke-width="24" stroke-linecap="round"/>
+  <path d="M236 151Q222 142 222 159V353Q222 370 236 361L380 267Q397 256 380 245Z" fill="white"/>
+</svg>
