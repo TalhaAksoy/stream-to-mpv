@@ -1,21 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Stream to mpv",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "description": "One-click 'Open in mpv' button directly on HTML5 video players with automatic HLS/MP4 stream detection.",
+  "description": "One-click 'Open in mpv / VLC' button on HTML5 video players with automatic HLS/MP4 stream detection.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAraERnIJx71B9rdCtX6yL47Y03jvRyIuy4GPA2Yv6qk9sAZxpJAwKETMbhR+8pHS5FM+geVKPNDyQ3AYvjOxFJWS594YC4QKmUpyAeoBIcr5TdIdgHLdff6DjwlEkd2Ptqegaqv6nB35kMXBRSmTbPWSLbEEX0gfnxStrDzL+tod+Img9k40Y3PaF8pcasPx7WxMcvJXVF99EdHvasIHe3CcTYLRLmmY/ngqEvghG581J+5g5O8AEfDC9qCdE9yPAg6t3W7hT8TAQvIglrMFJGBimYpqGIdGNFozfLI+QEXHgiloaEpvm3W35B/KxfyEpDMGJ9pegp2g81mBS4x+T4wIDAQAB",
   "browser_specific_settings": {
     "gecko": {
       "id": "stream-to-mpv@talha.dev",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     },
     "gecko_android": {
@@ -34,7 +36,9 @@
   ],
   "background": {
     "service_worker": "background.js",
-    "scripts": ["background.js"],
+    "scripts": [
+      "background.js"
+    ],
     "type": "module"
   },
   "content_scripts": [
@@ -48,6 +52,18 @@
       ],
       "all_frames": true,
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "page_probe.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "action": {

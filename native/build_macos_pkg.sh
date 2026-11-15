@@ -12,6 +12,7 @@ BUILD_DIR="${PROJECT_ROOT}/dist/pkg_build"
 PAYLOAD_DIR="${BUILD_DIR}/payload"
 SCRIPTS_DIR="${BUILD_DIR}/scripts"
 OUTPUT_PKG="${PROJECT_ROOT}/dist/StreamToMpv-Installer.pkg"
+PKG_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "${PROJECT_ROOT}/extension/manifest.json")"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${PAYLOAD_DIR}/Library/Application Support/StreamToMpv"
@@ -38,6 +39,8 @@ HOST_DIR="${USER_HOME}/mpv_host"
 HOST_SCRIPT="${HOST_DIR}/mpv_host.py"
 HOST_NAME="com.talha.mpv"
 FIXED_EXT_ID="haamijddaadhbhjfpblfloidmpglfmnk"
+# Chrome Web Store'dan kurulan eklentinin kimliği (install.sh ile aynı tutulmalı)
+CHROME_STORE_EXT_ID="cclgdinilniikloipfhflcchjohjcbpk"
 
 mkdir -p "${HOST_DIR}"
 cp "/Library/Application Support/StreamToMpv/mpv_host.py" "${HOST_SCRIPT}"
@@ -51,7 +54,21 @@ MANIFEST_JSON=$(cat <<JSON
   "path": "${HOST_SCRIPT}",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://${FIXED_EXT_ID}/"
+    "chrome-extension://${FIXED_EXT_ID}/",
+    "chrome-extension://${CHROME_STORE_EXT_ID}/"
+  ]
+}
+JSON
+)
+
+FIREFOX_MANIFEST_JSON=$(cat <<JSON
+{
+  "name": "${HOST_NAME}",
+  "description": "Native Messaging Host for Stream to mpv extension",
+  "path": "${HOST_SCRIPT}",
+  "type": "stdio",
+  "allowed_extensions": [
+    "stream-to-mpv@talha.dev"
   ]
 }
 JSON
@@ -60,15 +77,29 @@ JSON
 echo "${MANIFEST_JSON}" > "${HOST_DIR}/${HOST_NAME}.json"
 chown "${TARGET_USER}:staff" "${HOST_DIR}/${HOST_NAME}.json"
 
+APP_SUPPORT="${USER_HOME}/Library/Application Support"
 for NM_DIR in \
-  "${USER_HOME}/Library/Application Support/Chromium/NativeMessagingHosts" \
-  "${USER_HOME}/Library/Application Support/Google/Chrome/NativeMessagingHosts" \
-  "${USER_HOME}/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts" \
-  "${USER_HOME}/Library/Application Support/Microsoft Edge/NativeMessagingHosts"; do
+  "${APP_SUPPORT}/Chromium/NativeMessagingHosts" \
+  "${APP_SUPPORT}/Google/Chrome/NativeMessagingHosts" \
+  "${APP_SUPPORT}/BraveSoftware/Brave-Browser/NativeMessagingHosts" \
+  "${APP_SUPPORT}/Microsoft Edge/NativeMessagingHosts" \
+  "${APP_SUPPORT}/Vivaldi/NativeMessagingHosts" \
+  "${APP_SUPPORT}/Arc/User Data/NativeMessagingHosts" \
+  "${APP_SUPPORT}/com.operasoftware.Opera/NativeMessagingHosts" \
+  "${APP_SUPPORT}/Google/Chrome for Testing/NativeMessagingHosts"; do
+  # postinstall root olarak çalışır: kurulu olmayan tarayıcılar için root sahipli profil klasörü oluşturma
+  [[ -d "$(dirname "${NM_DIR}")" ]] || continue
   mkdir -p "${NM_DIR}"
   echo "${MANIFEST_JSON}" > "${NM_DIR}/${HOST_NAME}.json"
-  chown -R "${TARGET_USER}:staff" "$(dirname "${NM_DIR}")"
+  chown "${TARGET_USER}:staff" "${NM_DIR}" "${NM_DIR}/${HOST_NAME}.json"
 done
+
+FF_NM_DIR="${APP_SUPPORT}/Mozilla/NativeMessagingHosts"
+if [[ -d "${APP_SUPPORT}/Mozilla" ]]; then
+  mkdir -p "${FF_NM_DIR}"
+  echo "${FIREFOX_MANIFEST_JSON}" > "${FF_NM_DIR}/${HOST_NAME}.json"
+  chown "${TARGET_USER}:staff" "${FF_NM_DIR}" "${FF_NM_DIR}/${HOST_NAME}.json"
+fi
 
 exit 0
 EOF
@@ -80,7 +111,7 @@ pkgbuild \
   --root "${PAYLOAD_DIR}" \
   --scripts "${SCRIPTS_DIR}" \
   --identifier "com.talha.streamtompv.pkg" \
-  --version "1.1.0" \
+  --version "${PKG_VERSION}" \
   --install-location "/" \
   "${OUTPUT_PKG}"
 

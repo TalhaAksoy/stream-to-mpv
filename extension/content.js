@@ -231,6 +231,14 @@
       min-width: 0;
     }
 
+    .mpv-menu-note {
+      padding: 6px 12px 2px;
+      font-size: 11.5px;
+      line-height: 1.35;
+      color: #f5b041;
+      white-space: normal;
+    }
+
     .mpv-menu-divider {
       height: 1px;
       background: rgba(255, 255, 255, 0.08);
@@ -662,10 +670,48 @@
         return "sibnet";
       }
 
+      if ((host === "drive.google.com" || host === "docs.google.com") && extractDriveFileId(rawUrl)) {
+        return "gdrive";
+      }
+
       return null;
     } catch {
       return null;
     }
+  }
+
+  /** drive.google.com/file/d/<id>/preview|view → dosya kimliği (yoksa ""). */
+  function extractDriveFileId(rawUrl) {
+    try {
+      const m = new URL(rawUrl).pathname.match(/^\/(?:a\/[^/]+\/)?file\/d\/([A-Za-z0-9_-]{20,})(?:\/|$)/);
+      return m ? m[1] : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Google Drive önizleme oynatıcısının videoplayback adresleri DRIVE_STREAM çerezine bağlıdır (harici oynatıcıda
+   * 403) ve MSE için ayrık ses/görüntü izleridir. Herkese açık dosyanın orijinal hali ise çerezsiz, Range destekli
+   * drive.usercontent.google.com/download adresinden tek MP4 olarak akıtılabilir (mpv / VLC / mpv-android /
+   * Just Player ile doğrulandı).
+   */
+  function extractGoogleDriveStream() {
+    const id = extractDriveFileId(window.location.href);
+    if (!id) return null;
+    const direct = new URL("https://drive.usercontent.google.com/download");
+    direct.searchParams.set("id", id);
+    direct.searchParams.set("export", "download");
+    direct.searchParams.set("confirm", "t");
+    const resourceKey = new URL(window.location.href).searchParams.get("resourcekey");
+    if (resourceKey) direct.searchParams.set("resourcekey", resourceKey);
+    return {
+      provider: "gdrive",
+      streamUrl: direct.href,
+      format: "MP4",
+      variantsByHeight: {},
+      title: (document.title || "").replace(/\s*-\s*Google Drive\s*$/i, "")
+    };
   }
 
   function parseOkRuDom() {
@@ -952,6 +998,23 @@
     initialEmbedSnapshot = parseOkRuDom();
   } else if (currentEmbedProvider === "vk") {
     initialEmbedSnapshot = parseVkDom();
+  } else if (currentEmbedProvider === "gdrive") {
+    // Drive önizlemesinde video iç içe youtube.googleapis.com iframe'inde oynar ve o frame dosya kimliğini bilmez.
+    // Doğrudan adres burada (ağ isteği yapmadan) kaydedilir; iç frame'deki buton, kendi frame'inde akış yoksa
+    // sekmedeki bu kayda düşer. Video hiç oynatılmamış olsa bile çalışır.
+    const driveStream = extractGoogleDriveStream();
+    if (driveStream) {
+      chrome.runtime
+        .sendMessage({
+          type: "REGISTER_EXTRACTED_STREAM",
+          streamUrl: driveStream.streamUrl,
+          format: driveStream.format,
+          title: driveStream.title,
+          pageUrl: window.location.href,
+          userAgent: navigator.userAgent
+        })
+        .catch(() => {});
+    }
   }
 
   async function extractEmbedStreamInPage(rawUrl, options = {}) {
@@ -985,10 +1048,29 @@
     if (provider === "sibnet") {
       return await extractSibnetStream();
     }
+    if (provider === "gdrive") {
+      return extractGoogleDriveStream();
+    }
     return null;
   }
 
   // Toolbar popup üzerinden aktif sekme sorgulandığında Android için doğrudan HLS/MP4 çıkar
+  // Chromium tabanlı Android tarayıcılar (Bare vb.) eklenti açılır penceresinden intent:// bağlantısını uygulamaya
+  // iletmez (ERR_UNKNOWN_URL_SCHEME). Açılır pencere bunun yerine videonun üzerindeki menüyü açtırır; kullanıcı
+  // menü öğesine sayfada dokunduğu için intent gerçek bir kullanıcı hareketiyle açılır.
+  chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== "OPEN_PLAYER_MENU") return false;
+    const hosts = [...document.querySelectorAll("[data-mpv-control-host]")];
+    const visible = hosts.filter((h) => h.shadowRoot?.querySelector(".mpv-root.visible"));
+    const target = (visible.length > 0 ? visible : hosts)[0];
+    const trigger = target?.shadowRoot?.querySelector(".mpv-trigger");
+    // Bu frame'de oynatıcı yoksa yanıt verme; başka bir frame (örn. gömülü oynatıcı iframe'i) yanıtlasın
+    if (!trigger) return false;
+    trigger.click();
+    sendResponse({ ok: true });
+    return false;
+  });
+
   chrome.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "EXTRACT_YOUTUBE_HLS_ANDROID") return false;
     const vid = extractYouTubeVideoId(window.location.href);
@@ -1024,6 +1106,281 @@
     return true;
   });
 
+  // ---------------------------------------------------------------------------
+  // Oynatıcıdan bağımsız akış keşfi (uzantısız / MIME türü gizlenmiş HLS, blob: MSE oynatıcılar)
+  // ---------------------------------------------------------------------------
+  const PROBE_REQUEST_EVENT = "stream-to-mpv:probe-request";
+  const PROBE_RESPONSE_EVENT = "stream-to-mpv:probe-response";
+  const PLAYLIST_SNIFF_LIMIT = 256 * 1024;
+
+  /**
+   * MAIN world'deki page_probe.js'ten sayfadaki oynatıcı nesnelerinin (JWPlayer, Video.js, ArtPlayer…)
+   * gerçek kaynak URL'lerini ister. Tıklanan video geçici bir nonce özniteliğiyle işaretlenir ki
+   * birden fazla oynatıcı varsa doğru olanın kaynakları öne alınsın.
+   */
+  function requestPagePlayerSources(video, timeoutMs = 600) {
+    return new Promise((resolve) => {
+      const nonce = `stm${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      let done = false;
+      const finish = (sources) => {
+        if (done) return;
+        done = true;
+        document.removeEventListener(PROBE_RESPONSE_EVENT, onResponse);
+        try {
+          video?.removeAttribute("data-stream-to-mpv-probe");
+        } catch {
+          // Yoksay
+        }
+        resolve(Array.isArray(sources) ? sources : []);
+      };
+      const onResponse = (ev) => {
+        let data = null;
+        try {
+          data = JSON.parse(typeof ev.detail === "string" ? ev.detail : "");
+        } catch {
+          return;
+        }
+        if (!data || data.nonce !== nonce) return;
+        finish(data.sources);
+      };
+      document.addEventListener(PROBE_RESPONSE_EVENT, onResponse);
+      try {
+        video?.setAttribute("data-stream-to-mpv-probe", nonce);
+      } catch {
+        // Yoksay
+      }
+      try {
+        document.dispatchEvent(new CustomEvent(PROBE_REQUEST_EVENT, { detail: nonce }));
+      } catch {
+        finish([]);
+        return;
+      }
+      setTimeout(() => finish([]), timeoutMs);
+    });
+  }
+
+  /**
+   * URL'yi bu frame'in kendi bağlamından (aynı Referer / origin ile, oynatıcının yaptığı gibi) çeker ve
+   * gövde #EXTM3U ile başlıyorsa playlist metnini döndürür. Video dosyalarını indirmez: ilk parça
+   * playlist imzası taşımıyorsa veya MIME türü video/* ise hemen iptal edilir.
+   */
+  /**
+   * Bir promise'i süre sınırıyla yarıştırır; süre dolarsa fallback döner. Buton "..." durumunda asla
+   * sonsuza kadar takılı kalmasın diye tıklama akışındaki tüm beklemeler bununla sınırlandırılır.
+   */
+  function withDeadline(promise, ms, fallback) {
+    let timer = null;
+    return Promise.race([
+      Promise.resolve(promise).catch(() => fallback),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      })
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  function sendMessageWithDeadline(message, ms = 8000) {
+    return withDeadline(chrome.runtime.sendMessage(message), ms, null);
+  }
+
+  function fetchPlaylistText(url, timeoutMs = 5000) {
+    return withDeadline(fetchPlaylistTextInner(url, timeoutMs), timeoutMs + 500, null);
+  }
+
+  async function fetchPlaylistTextInner(url, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal
+      });
+      if (!res.ok) return null;
+      const mime = (res.headers.get("content-type") || "").toLowerCase();
+      if (/^(video|audio)\//.test(mime) && !/mpegurl/.test(mime)) {
+        controller.abort();
+        return null;
+      }
+      const reader = res.body?.getReader();
+      if (!reader) return null;
+      const decoder = new TextDecoder("utf-8");
+      let text = "";
+      let received = 0;
+      while (received < PLAYLIST_SNIFF_LIMIT) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        text += decoder.decode(value, { stream: true });
+        if (text.length >= 16 && !/^\uFEFF?\s*#EXTM3U/.test(text)) {
+          reader.cancel().catch(() => {});
+          return null;
+        }
+      }
+      reader.cancel().catch(() => {});
+      text = text.replace(/^\uFEFF/, "").trimStart();
+      if (!text.startsWith("#EXTM3U")) return null;
+      return { url: res.url && isValidStreamHttpUrl(res.url) ? res.url : url, text };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const NON_PLAYLIST_EXT_RE =
+    /\.(?:ts|m4s|m4f|mp4|m4v|webm|mkv|mov|aac|mp3|m4a|vtt|srt|key|jpe?g|png|gif|webp|avif|svg|ico|woff2?|ttf|otf|js|mjs|css|json|xml|html?|php|wasm|map|txt)$/i;
+
+  function collectResourceTimingCandidates() {
+    const out = [];
+    try {
+      const entries = performance.getEntriesByType("resource");
+      for (let i = entries.length - 1; i >= 0 && out.length < 10; i--) {
+        const e = entries[i];
+        if (e.initiatorType !== "xmlhttprequest" && e.initiatorType !== "fetch") continue;
+        let u;
+        try {
+          u = new URL(e.name);
+        } catch {
+          continue;
+        }
+        if (u.protocol !== "http:" && u.protocol !== "https:") continue;
+        const lowerPath = u.pathname.toLowerCase();
+        // .m3u8 uzantılılar zaten ağ yakalamasıyla bulunur; burada yalnızca gizlenmiş adresler aranır
+        if (lowerPath.endsWith(".m3u8") || NON_PLAYLIST_EXT_RE.test(lowerPath)) continue;
+        if (/\/(?:api|ajax|graphql|log|stats|ping|analytics|collect|track|auth)(?:\/|$)/i.test(lowerPath)) continue;
+        if (!out.includes(e.name)) out.push(e.name);
+      }
+    } catch {
+      // Yoksay
+    }
+    return out;
+  }
+
+  function classifyPlayerSourceKind(source) {
+    const type = String(source?.type || "").toLowerCase();
+    let path = "";
+    try {
+      path = new URL(source.url).pathname.toLowerCase();
+    } catch {
+      return "invalid";
+    }
+    if (/dash|mpd/.test(type) || path.endsWith(".mpd")) return "dash";
+    if (/hls|m3u8|mpegurl/.test(type) || path.endsWith(".m3u8") || path.includes(".m3u8/")) return "hls";
+    if (/mp4|webm|video\/|mov|mkv/.test(type) || /\.(mp4|m4v|webm|mkv|mov)$/.test(path)) return "file";
+    return "unknown";
+  }
+
+  /**
+   * Ağ yakalamasıyla eşleşen bir akış bulunamadığında (örn. /w/<token> gibi uzantısız, application/octet-stream
+   * olarak sunulan HLS playlist'leri veya şifreli yapılandırmalı JWPlayer gömmeleri) bu frame içinde gerçek
+   * akışı keşfeder:
+   *   1) Sayfadaki oynatıcı nesnelerinin kaynakları (page_probe.js, MAIN world)
+   *   2) Arka planın bu frame için tuttuğu MIME türü belirsiz XHR adayları; frame içinden yeniden çekilip
+   *      #EXTM3U imzasıyla doğrulanır.
+   */
+  async function discoverStreamInFrame(video) {
+    const tried = new Set();
+    const sources = (await requestPagePlayerSources(video))
+      .filter((s) => s && isValidStreamHttpUrl(s.url))
+      .sort((a, b) => Number(Boolean(b.isTarget)) - Number(Boolean(a.isTarget)));
+
+    for (const source of sources) {
+      if (tried.has(source.url)) continue;
+      tried.add(source.url);
+      const kind = classifyPlayerSourceKind(source);
+      if (kind === "dash" || kind === "invalid") continue;
+      if (kind === "file") {
+        return { provider: source.player, streamUrl: source.url, format: "MP4", variantsByHeight: {} };
+      }
+      const playlist = await fetchPlaylistText(source.url, 4000);
+      if (playlist) {
+        return {
+          provider: source.player,
+          streamUrl: playlist.url,
+          format: "HLS",
+          playlistText: playlist.text,
+          variantsByHeight: {}
+        };
+      }
+      if (kind === "hls") {
+        // Oynatıcı türü HLS diyor ama doğrulama zaman aşımına uğradı (yavaş proxy / CORS): yine de kullan
+        return { provider: source.player, streamUrl: source.url, format: "HLS", variantsByHeight: {} };
+      }
+    }
+
+    let candidates = [];
+    try {
+      const res = await sendMessageWithDeadline({ type: "GET_PROBE_CANDIDATES" }, 4000);
+      candidates = Array.isArray(res?.candidates) ? res.candidates.map((c) => c.url) : [];
+    } catch {
+      candidates = [];
+    }
+    // Bağımsız ikinci kaynak: bu frame'in Resource Timing kayıtları (XHR/fetch ile yüklenmiş, uzantısı
+    // medya segmenti / görsel / betik olmayan adresler). Service worker zamanlamasından etkilenmez.
+    for (const url of collectResourceTimingCandidates()) {
+      if (!candidates.includes(url)) candidates.push(url);
+    }
+    const pending = candidates
+      .filter((url) => isValidStreamHttpUrl(url) && !tried.has(url))
+      .slice(0, 12)
+      .map((url) => fetchPlaylistText(url, 3500));
+    const results = await Promise.all(pending);
+    // En yeni adaylar önde; master playlist'i (#EXT-X-STREAM-INF) variant'lara tercih et
+    const verified = results.filter(Boolean);
+    const best = verified.find((r) => r.text.includes("#EXT-X-STREAM-INF")) || verified[0];
+    if (best) {
+      return {
+        provider: "network",
+        streamUrl: best.url,
+        format: "HLS",
+        playlistText: best.text,
+        variantsByHeight: {}
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Bazı siteler gerçek gömme oynatıcıyı (ok.ru, mail.ru, hexload…) kendi sarmalayıcılarına
+   * `?id=https://ok.ru/videoembed/...` gibi bir parametreyle verir. Masaüstünde yt-dlp sarmalayıcıyı değil
+   * içteki gerçek gömme adresini çözebildiği için onu döndürür.
+   */
+  function findWrappedEmbedUrl(rawUrl) {
+    try {
+      const u = new URL(rawUrl);
+      for (const [, val] of u.searchParams.entries()) {
+        if (!/^https?:\/\//i.test(val)) continue;
+        if (!isValidStreamHttpUrl(val)) continue;
+        const inner = new URL(val);
+        if (inner.hostname === u.hostname) continue;
+        return inner.href;
+      }
+    } catch {
+      // Yoksay
+    }
+    return "";
+  }
+
+  const PLAYER_LABELS = {
+    mpv: "mpv",
+    vlc: "VLC",
+    mx: "MX Player",
+    mxpro: "MX Player Pro",
+    just: "Just Player",
+    chooser: "player"
+  };
+  let currentPlayerLabel = "mpv";
+
+  async function refreshPlayerLabel(isAndroid) {
+    try {
+      const data = await chrome.storage.local.get(["player", "androidPlayer"]);
+      const key = isAndroid ? data.androidPlayer : data.player;
+      currentPlayerLabel = PLAYER_LABELS[key] || "mpv";
+    } catch {
+      currentPlayerLabel = "mpv";
+    }
+  }
+
   function collectVideoContext(video, meta) {
     const sourceUrls = [];
     for (const node of video.querySelectorAll("source")) {
@@ -1036,7 +1393,8 @@
       sources: sourceUrls,
       videoCountInFrame: countEligibleVideosInFrame(),
       actionTimestamp: meta.lastActivityAt || Date.now(),
-      pageUrl: window.location.href
+      pageUrl: window.location.href,
+      fallbackPageUrl: findWrappedEmbedUrl(window.location.href) || window.location.href
     };
   }
 
@@ -1250,7 +1608,8 @@
           closeMenu();
           return;
         } catch (err) {
-          if (err?.name === "AbortError") {
+          // Kullanıcı iptali sessiz; "Share failed" (paylaşım desteklenmiyor) panoya kopyalamaya düşer
+          if (err?.name === "AbortError" && !/fail/i.test(err?.message || "")) {
             closeMenu();
             return;
           }
@@ -1273,12 +1632,18 @@
 
       try {
         const context = collectVideoContext(video, meta);
-        const response = await chrome.runtime.sendMessage({
+        // yt-dlp ile çözümleme (VLC + sayfa URL'si) 25 sn sürebildiği için süre sınırı daha uzun
+        const response = await sendMessageWithDeadline({
           type: "OPEN_FROM_VIDEO_OVERLAY",
           preferredResolution,
           clientHandlesAndroidIntent: true,
           ...context
-        });
+        }, 45000);
+
+        if (!response) {
+          showToast("The extension did not respond in time. Please try again.", "error", 4200);
+          return;
+        }
 
         if (response?.ok) {
           if (response.intentUri) {
@@ -1295,9 +1660,9 @@
           } catch {
             // Yoksay
           }
-          showToast(`Opening in mpv (${labelText})`, "success", 2600);
+          showToast(`Opening in ${currentPlayerLabel} (${labelText})`, "success", 2600);
         } else {
-          showToast(response?.errorMessage || "Could not open in mpv.", "error", 4200);
+          showToast(response?.errorMessage || `Could not open in ${currentPlayerLabel}.`, "error", 4200);
         }
       } catch (err) {
         showToast(err?.message || "Extension error.", "error", 4000);
@@ -1321,10 +1686,54 @@
       }
     }
 
-    function renderResolutionItems(heights, mode, isAndroid = false, androidIntents = {}, streamUrls = {}) {
+    function appendAndroidIntentLink(label, tag, href) {
+      const link = document.createElement("a");
+      link.className = "mpv-item";
+      link.href = href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      appendOptionLabels(link, label, tag);
+      link.addEventListener("click", (ev) => {
+        // ev.preventDefault() ÇAĞRILMAMALI: tarayıcının doğal intent:// navigasyonu kullanılır
+        ev.stopPropagation();
+        try {
+          if (!video.paused) video.pause();
+        } catch {
+          // Yoksay
+        }
+        setTimeout(() => showToast(`Opening (${label})`, "success", 2600), 80);
+      });
+      menuItemsEl.appendChild(link);
+    }
+
+    function renderResolutionItems(heights, mode, isAndroid = false, androidIntents = {}, streamUrls = {}, extras = {}) {
       menuItemsEl.replaceChildren();
 
-      const options = [{ value: "best", label: isAndroid ? "Open in mpv-android" : "Auto (Best Quality)", tag: "BEST" }];
+      // Uzantısız / octet-stream HLS (örn. /w/<token>): mpv-android'in FFmpeg'i bunu HLS olarak açmaz ve
+      // intent ile seçenek iletilemez. VLC içerikten algıladığı için öne çıkar.
+      const altIntents = extras?.altIntents || {};
+      // mpv-android (FFmpeg uzantı kontrolü) ve Just Player (ExoPlayer, intent MIME'ı video/*) bu akışı açamaz;
+      // VLC ve MX Player içerikten tanır (emülatörde doğrulandı). MX Pro doğrulanmadı.
+      const recommendVlc =
+        isAndroid && extras?.disguisedHls && !["vlc", "mx"].includes(extras?.androidPlayer) && altIntents.vlc;
+      if (recommendVlc) {
+        const note = document.createElement("div");
+        note.className = "mpv-menu-note";
+        const p = extras.androidPlayer;
+        note.textContent =
+          p === "mpv" || p === "just"
+            ? `${p === "mpv" ? "mpv-android" : "Just Player"} can't open this stream type. Use VLC:`
+            : p === "chooser"
+              ? "Some apps can't open this stream type. VLC works:"
+              : `${currentPlayerLabel} may not open this stream type. VLC works:`;
+        menuItemsEl.appendChild(note);
+        appendAndroidIntentLink("Open in VLC", "RECOMMENDED", altIntents.vlc);
+        const div = document.createElement("div");
+        div.className = "mpv-menu-divider";
+        menuItemsEl.appendChild(div);
+      }
+
+      const options = [{ value: "best", label: isAndroid ? `Open in ${currentPlayerLabel}` : "Auto (Best Quality)", tag: "BEST" }];
 
       const list = Array.isArray(heights) && heights.length > 0 ? heights : [];
       for (const h of list) {
@@ -1359,7 +1768,7 @@
             }
             // Bağlantı aktivasyonu tamamlandıktan hemen sonra menüyü kapat ve bilgi göster
             setTimeout(() => {
-              showToast(`Opening in mpv (${opt.label})`, "success", 2800);
+              showToast(`Opening in ${currentPlayerLabel} (${opt.label})`, "success", 2800);
             }, 80);
           });
 
@@ -1388,6 +1797,13 @@
         divider.className = "mpv-menu-divider";
         menuItemsEl.appendChild(divider);
 
+        if (altIntents.vlc && !recommendVlc) {
+          appendAndroidIntentLink("Open in VLC", "VLC", altIntents.vlc);
+        }
+        if (altIntents.chooser) {
+          appendAndroidIntentLink("Open with…", "APPS", altIntents.chooser);
+        }
+
         const shareBtn = document.createElement("button");
         shareBtn.type = "button";
         shareBtn.className = "mpv-item";
@@ -1412,6 +1828,9 @@
       }
 
       hideToast();
+      await withDeadline(refreshPlayerLabel(/Android/i.test(navigator.userAgent)), 1500, null);
+      const menuHeaderLabel = shadow.querySelector(".mpv-menu-header span");
+      if (menuHeaderLabel) menuHeaderLabel.textContent = `Open in ${currentPlayerLabel}`;
 
       // Arka plandan bu videonun mevcut çözünürlüklerini ve (Android ise) hazır intent:// linklerini sorgula
       let heights = [2160, 1440, 1080, 720, 480, 360];
@@ -1419,9 +1838,16 @@
       let isAndroid = /Android/i.test(navigator.userAgent);
       let androidIntents = {};
       let streamUrls = {};
+      let menuExtras = { altIntents: {}, disguisedHls: false, androidPlayer: "mpv" };
+      const takeExtras = (r) => {
+        if (!r || typeof r !== "object") return;
+        if (r.altIntents && typeof r.altIntents === "object") menuExtras.altIntents = r.altIntents;
+        if (typeof r.disguisedHls === "boolean") menuExtras.disguisedHls = r.disguisedHls;
+        if (typeof r.androidPlayer === "string") menuExtras.androidPlayer = r.androidPlayer;
+      };
       try {
         const context = collectVideoContext(video, meta);
-        const resInfo = await chrome.runtime.sendMessage({
+        const resInfo = await sendMessageWithDeadline({
           type: "GET_VIDEO_RESOLUTIONS",
           ...context
         });
@@ -1430,6 +1856,7 @@
           heights = Array.isArray(resInfo.heights) ? resInfo.heights : [];
           isAndroid = Boolean(resInfo.isAndroid);
           androidIntents = resInfo.androidIntents || {};
+          takeExtras(resInfo);
           streamUrls = resInfo.streamUrls || {};
         }
       } catch {
@@ -1454,9 +1881,13 @@
         badgeEl.textContent = "...";
         triggerBtn.disabled = true;
         try {
-          const extracted = await extractEmbedStreamInPage(window.location.href, { isAndroid });
+          const extracted = await withDeadline(
+            extractEmbedStreamInPage(window.location.href, { isAndroid }),
+            12000,
+            null
+          );
           if (extracted?.streamUrl) {
-            const regRes = await chrome.runtime.sendMessage({
+            const regRes = await sendMessageWithDeadline({
               type: "REGISTER_EXTRACTED_STREAM",
               streamUrl: extracted.streamUrl,
               format: extracted.format,
@@ -1467,7 +1898,7 @@
             });
 
             if (extracted.refreshFromSession) {
-              const refreshed = await chrome.runtime.sendMessage({
+              const refreshed = await sendMessageWithDeadline({
                 type: "GET_VIDEO_RESOLUTIONS",
                 ...collectVideoContext(video, meta)
               });
@@ -1475,16 +1906,19 @@
                 mode = refreshed.mode || mode;
                 heights = Array.isArray(refreshed.heights) ? refreshed.heights : heights;
                 androidIntents = refreshed.androidIntents || androidIntents;
+                takeExtras(refreshed);
                 streamUrls = refreshed.streamUrls || streamUrls;
               } else if (regRes?.ok) {
                 heights = Array.isArray(regRes.heights) ? regRes.heights : [];
                 androidIntents = regRes.androidIntents || {};
+                takeExtras(regRes);
                 streamUrls = regRes.streamUrls || { best: extracted.streamUrl };
                 mode = heights.length > 0 ? "hls_master" : "direct";
               }
             } else if (regRes?.ok) {
               heights = Array.isArray(regRes.heights) ? regRes.heights : [];
               androidIntents = regRes.androidIntents || {};
+              takeExtras(regRes);
               streamUrls = regRes.streamUrls || { best: extracted.streamUrl };
               mode =
                 extracted.provider === "youtube"
@@ -1502,18 +1936,57 @@
         }
       }
 
+      // Ağ yakalaması ve bilinen gömme çıkarıcıları sonuç vermediyse (örn. uzantısız /w/<token> HLS, şifreli
+      // yapılandırmalı JWPlayer gömmeleri) bu frame içinde oynatıcıdan bağımsız keşif yap.
+      const stillNoStream = isAndroid ? !androidIntents.best : mode === "ytdl";
+      const skipDiscovery = !isAndroid && Boolean(extractYouTubeVideoId(window.location.href));
+      if (stillNoStream && !skipDiscovery) {
+        badgeEl.textContent = "...";
+        triggerBtn.disabled = true;
+        try {
+          const discovered = await withDeadline(discoverStreamInFrame(video), 12000, null);
+          if (discovered?.streamUrl) {
+            const regRes = await sendMessageWithDeadline({
+              type: "REGISTER_EXTRACTED_STREAM",
+              streamUrl: discovered.streamUrl,
+              format: discovered.format,
+              playlistText: discovered.playlistText,
+              variantsByHeight: discovered.variantsByHeight,
+              title: document.title || "",
+              pageUrl: window.location.href,
+              userAgent: navigator.userAgent
+            });
+            if (regRes?.ok) {
+              heights = Array.isArray(regRes.heights) ? regRes.heights : [];
+              androidIntents = regRes.androidIntents || {};
+              takeExtras(regRes);
+              streamUrls = regRes.streamUrls || { best: regRes.streamUrl || discovered.streamUrl };
+              mode = heights.length > 0 ? "hls_master" : "direct";
+            } else if (regRes?.statusCode === "UNSUPPORTED_STREAM") {
+              showToast(regRes.errorMessage || "Unsupported stream (DRM).", "error", 4200);
+              return;
+            }
+          }
+        } catch {
+          // Keşif başarısızsa mevcut duruma göre devam et
+        } finally {
+          badgeEl.textContent = "mpv";
+          triggerBtn.disabled = false;
+        }
+      }
+
       if (isAndroid && !androidIntents.best) {
         showToast(
           ytVideoId
             ? "Could not extract YouTube HLS stream for this video."
-            : "Play the video first so its stream URL can be captured.",
+            : "No stream found for this player yet. Start playback for a few seconds, then tap again.",
           "error",
-          3600
+          4200
         );
         return;
       }
 
-      renderResolutionItems(heights, mode, isAndroid, androidIntents, streamUrls);
+      renderResolutionItems(heights, mode, isAndroid, androidIntents, streamUrls, menuExtras);
       openMenu();
     });
 

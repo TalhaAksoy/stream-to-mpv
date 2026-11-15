@@ -180,6 +180,138 @@ with open({repr(str(args_log_file))}, "w") as f:
         finally:
             mpv_host.find_binary = orig_find
 
+        import time
+
+        def make_mock_binary(name: str, log_file: Path, stdout_text: str = "") -> Path:
+            script = tmp_path / name
+            script.write_text(
+                f"""#!/usr/bin/env python3
+import json, sys
+with open({repr(str(log_file))}, "w") as f:
+    json.dump(sys.argv[1:], f)
+sys.stdout.write({repr(stdout_text)})
+""",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            return script
+
+        def wait_for_args(log_file: Path) -> list:
+            for _ in range(40):
+                if log_file.exists() and log_file.read_text(encoding="utf-8").strip():
+                    break
+                time.sleep(0.05)
+            return json.loads(log_file.read_text(encoding="utf-8"))
+
+        # 7. Uzantısız yakalanmış HLS akışı (örn. /w/<token>) kind=stream ile gelince ytdl_hook'a düşmemeli;
+        #    Referer / User-Agent başlıkları korunmalı (eski davranış başlıkları siliyordu).
+        mpv_log = tmp_path / "mpv_args_stream.json"
+        mock_mpv = make_mock_binary("mock_mpv_stream", mpv_log)
+        mock_ytdlp_unused = make_mock_binary("mock_ytdlp_unused", tmp_path / "unused.json")
+        try:
+            mpv_host.find_binary = lambda name: (
+                str(mock_mpv) if name == "mpv" else str(mock_ytdlp_unused) if name == "yt-dlp" else None
+            )
+            res = mpv_host.handle_message(
+                {
+                    "action": "open",
+                    "kind": "stream",
+                    "url": "https://www.example-anime.test/w/AbCdEf123",
+                    "referer": "https://www.example-anime.test/ep-6",
+                    "user_agent": "BrowserUA/1.0",
+                    "use_ytdlp_fallback": True,
+                    "stream_format": "hls",
+                    "title": "Episode 6",
+                }
+            )
+            assert res["ok"] is True and res["resolved_via"] == "direct", res
+            args = wait_for_args(mpv_log)
+            assert "--referrer=https://www.example-anime.test/ep-6" in args, args
+            assert "--user-agent=BrowserUA/1.0" in args, args
+            assert "--force-media-title=Episode 6" in args, args
+            # FFmpeg 7.1+ uzantısız/octet-stream HLS'yi kendiliğinden algılamaz: demuxer zorlanmalı
+            assert "--demuxer-lavf-format=hls" in args, args
+            assert not any(a.startswith("--ytdl-format") for a in args), args
+            assert args[-1] == "https://www.example-anime.test/w/AbCdEf123"
+            print("  [PASS] Extensionless captured HLS (kind=stream) keeps Referer/User-Agent and forces the HLS demuxer")
+        finally:
+            mpv_host.find_binary = orig_find
+
+        # 8. mpv + sayfa URL'si (kind=page) yt-dlp yoksa sessizce yanlış açmak yerine anlaşılır hata dönmeli
+        try:
+            mpv_host.find_binary = lambda name: str(mock_mpv) if name == "mpv" else None
+            res = mpv_host.handle_message(
+                {"action": "open", "kind": "page", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+            )
+            assert res["ok"] is False and res["error_code"] == "YTDLP_NOT_INSTALLED", res
+            print("  [PASS] Page URL without yt-dlp returns YTDLP_NOT_INSTALLED instead of a dead fallback")
+        finally:
+            mpv_host.find_binary = orig_find
+
+        # 9. VLC: başlıklar --http-referrer / --http-user-agent ile aktarılmalı
+        vlc_log = tmp_path / "vlc_args.json"
+        mock_vlc = make_mock_binary("mock_vlc", vlc_log)
+        try:
+            mpv_host.find_binary = lambda name: str(mock_vlc) if name == "vlc" else None
+            res = mpv_host.handle_message(
+                {
+                    "action": "open",
+                    "player": "vlc",
+                    "kind": "stream",
+                    "url": "https://cdn.example.com/hls/master.m3u8?token=xyz",
+                    "referer": "https://site.example.com/watch/1",
+                    "user_agent": "BrowserUA/2.0",
+                    "preferred_resolution": "720",
+                }
+            )
+            assert res["ok"] is True and res["player"] == "vlc", res
+            args = wait_for_args(vlc_log)
+            assert "--http-referrer=https://site.example.com/watch/1" in args, args
+            assert "--no-qt-privacy-ask" in args, "first-run privacy dialog must not block the player window"
+            assert "--http-user-agent=BrowserUA/2.0" in args, args
+            assert "--adaptive-maxheight=720" in args, args
+            assert args[-1] == "https://cdn.example.com/hls/master.m3u8?token=xyz", args
+            print("  [PASS] VLC spawned with --http-referrer, --http-user-agent, resolution cap and stream URL")
+        finally:
+            mpv_host.find_binary = orig_find
+
+        # 10. VLC + sayfa URL'si: yt-dlp --dump-json ile ayrık video+ses çözülüp --input-slave ile verilmeli
+        vlc_log2 = tmp_path / "vlc_args_page.json"
+        mock_vlc2 = make_mock_binary("mock_vlc2", vlc_log2)
+        ytdlp_json = json.dumps(
+            {
+                "requested_formats": [
+                    {"url": "https://rr1.googlevideo.test/video.m3u8", "vcodec": "avc1", "http_headers": {"User-Agent": "YtUA/1"}},
+                    {"url": "https://rr1.googlevideo.test/audio.m3u8", "vcodec": "none"},
+                ]
+            }
+        )
+        mock_ytdlp = make_mock_binary("mock_ytdlp", tmp_path / "ytdlp_args.json", ytdlp_json + "\n")
+        try:
+            mpv_host.find_binary = lambda name: (
+                str(mock_vlc2) if name == "vlc" else str(mock_ytdlp) if name == "yt-dlp" else None
+            )
+            res = mpv_host.handle_message(
+                {"action": "open", "player": "vlc", "kind": "page", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+            )
+            assert res["ok"] is True and res["resolved_via"] == "yt-dlp", res
+            args = wait_for_args(vlc_log2)
+            assert "--input-slave=https://rr1.googlevideo.test/audio.m3u8" in args, args
+            assert "--http-user-agent=YtUA/1" in args, args
+            assert args[-1] == "https://rr1.googlevideo.test/video.m3u8", args
+            ytdlp_args = json.loads((tmp_path / "ytdlp_args.json").read_text(encoding="utf-8"))
+            assert "--dump-json" in ytdlp_args and ytdlp_args[-1] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+            print("  [PASS] VLC page URL resolved via yt-dlp --dump-json with separate audio as --input-slave")
+        finally:
+            mpv_host.find_binary = orig_find
+
+        # 11. İzin listesinde olmayan oynatıcı / yol reddedilmeli; ping oynatıcı durumlarını döndürmeli
+        res = mpv_host.handle_message({"action": "open", "player": "/bin/sh", "url": "https://example.com/a.mp4"})
+        assert res["ok"] is False and res["error_code"] == "INVALID_PLAYER", res
+        pong = mpv_host.handle_message({"action": "ping"})
+        assert pong["ok"] is True and set(pong["players"]) == {"mpv", "vlc"} and pong["host_version"], pong
+        print("  [PASS] Non-allowlisted player rejected; ping reports host_version and per-player availability")
+
     print("All Native Messaging Host tests passed successfully!")
 
 

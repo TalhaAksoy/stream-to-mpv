@@ -15,6 +15,7 @@ let listeners = {};
 let simulateNativeHostMissing = false;
 let simulatePlatformOs = "mac";
 let lastNativePayload = null;
+let simulateOldHost = false;
 
 function setupChromeMock() {
   listeners = {
@@ -34,6 +35,11 @@ function setupChromeMock() {
       sendNativeMessage: async (hostName, payload) => {
         if (simulateNativeHostMissing) {
           throw new Error("Specified native messaging host not found.");
+        }
+        if (payload?.action === "ping") {
+          return simulateOldHost
+            ? { ok: true, status: "pong", mpv_available: true }
+            : { ok: true, status: "pong", host_version: "1.2.0", mpv_available: true, players: { mpv: true, vlc: true } };
         }
         lastNativePayload = { hostName, payload };
         return {
@@ -433,6 +439,159 @@ assert.equal(okMacOpen.ok, true);
 assert.equal(lastNativePayload.payload.url, "https://ok8-11.vkuser.net/?type=3&ct=0&id=777");
 assert.equal(lastNativePayload.payload.referer, "https://ok.ru/videoembed/4637825762649");
 assert.equal(lastNativePayload.payload.user_agent, "AndroidChrome/131.0");
+// OK.ru'nun 720p dosyası MP4'tür: HLS demuxer'ı zorlanmamalı
+assert.equal(lastNativePayload.payload.stream_format, "");
 console.log("  [PASS] Sibnet 302 redirect & OK.ru/Mail.ru/VK multi-resolution extraction work across Android & macOS");
+
+// --- TR Anime İzle yeni tema: uzantısız /w/<token> HLS (application/octet-stream) ---
+mockTabs.set(606, { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" });
+await listeners.onTabUpdated[0](606, { status: "loading", url: "https://www.anime.example/ep-6" }, { title: "Ep 6" });
+const wUrl = "https://www.anime.example/w/xI_JV4b7UUYScx5YTF5GPlmBU9Jn";
+await listeners.onSendHeaders[0]({
+  requestId: "w1", tabId: 606, frameId: 0, type: "xmlhttprequest", url: wUrl,
+  requestHeaders: [{ name: "Referer", value: "https://www.anime.example/ep-6" }, { name: "User-Agent", value: "AnimeUA/1" }]
+});
+await listeners.onHeadersReceived[0]({
+  requestId: "w1", tabId: 606, frameId: 0, type: "xmlhttprequest", url: wUrl, statusCode: 200,
+  responseHeaders: [{ name: "Content-Type", value: "application/octet-stream" }, { name: "Content-Length", value: "520" }]
+});
+// .jpeg kılıklı segmentler aday olmamalı ve depolamaya yazılmamalı
+await listeners.onSendHeaders[0]({ requestId: "w2", tabId: 606, frameId: 0, type: "xmlhttprequest", url: "https://sv1.cdn.example/plateau/x/v2/file000.jpeg", requestHeaders: [] });
+// Görsel / betik istekleri tamamen yok sayılmalı
+await listeners.onSendHeaders[0]({ requestId: "w3", tabId: 606, frameId: 0, type: "image", url: "https://www.anime.example/w/notaplaylist", requestHeaders: [] });
+
+// Token üreten API uçları (örn. /api/watch/<id>) asla yeniden çekilecek aday olmamalı
+await listeners.onHeadersReceived[0]({
+  requestId: "w5", tabId: 606, frameId: 0, type: "xmlhttprequest", url: "https://www.anime.example/api/watch/01a1db30", statusCode: 200,
+  responseHeaders: [{ name: "Content-Type", value: "text/plain" }, { name: "Content-Length", value: "140" }]
+});
+const cands = await sendMessageToBg({ type: "GET_PROBE_CANDIDATES" }, "abcdefghijklmnopabcdefghijklmnop", { tab: { id: 606 }, frameId: 0 });
+assert.deepEqual(cands.candidates.map((c) => c.url), [wUrl]);
+assert.ok(!("w2" in (sessionStore.pendingRequests || {})), "segment requests must not be written to pendingRequests");
+assert.ok(!("w3" in (sessionStore.pendingRequests || {})), "image requests must not be written to pendingRequests");
+console.log("  [PASS] Ambiguous octet-stream XHR recorded as in-frame probe candidate; segments/images skip storage writes");
+
+const masterText = `#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-STREAM-INF:BANDWIDTH=15634237,RESOLUTION=1920x1080\n/w/xI_JV4b7UUYScx5YTF5GPlmBU9Jn/v0\n#EXT-X-STREAM-INF:BANDWIDTH=8293034,RESOLUTION=1280x720\n/w/xI_JV4b7UUYScx5YTF5GPlmBU9Jn/v1\n`;
+const reg = await sendMessageToBg(
+  { type: "REGISTER_EXTRACTED_STREAM", streamUrl: wUrl, format: "HLS", playlistText: masterText, pageUrl: "https://www.anime.example/ep-6", userAgent: "AnimeUA/1", title: "Ep 6" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" }, frameId: 0 }
+);
+assert.equal(reg.ok, true);
+assert.deepEqual(reg.heights, [1080, 720]);
+assert.equal(reg.streamUrls["720"], "https://www.anime.example/w/xI_JV4b7UUYScx5YTF5GPlmBU9Jn/v1");
+assert.equal(reg.disguisedHls, true);
+
+// Aynı küçük playlist yeniden çekildiğinde (<50 KB, uzantısız) "init segmenti" temizliği kaydı silmemeli
+await listeners.onHeadersReceived[0]({
+  requestId: "w4", tabId: 606, frameId: 0, type: "xmlhttprequest", url: wUrl, statusCode: 200,
+  responseHeaders: [{ name: "Content-Type", value: "application/octet-stream" }, { name: "Content-Length", value: "520" }]
+});
+lastNativePayload = null;
+const wOpen = await sendMessageToBg(
+  { type: "OPEN_FROM_VIDEO_OVERLAY", preferredResolution: "720", currentSrc: "blob:https://www.anime.example/1", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-6" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" }, frameId: 0 }
+);
+assert.equal(wOpen.ok, true);
+assert.equal(lastNativePayload.payload.url, "https://www.anime.example/w/xI_JV4b7UUYScx5YTF5GPlmBU9Jn/v1");
+assert.equal(lastNativePayload.payload.kind, "stream");
+assert.equal(lastNativePayload.payload.stream_format, "hls");
+assert.equal(lastNativePayload.payload.use_ytdlp_fallback, false);
+assert.equal(lastNativePayload.payload.referer, "https://www.anime.example/ep-6");
+assert.equal(lastNativePayload.payload.player, "mpv");
+console.log("  [PASS] In-page verified /w/<token> master registers 1080/720 variants, survives small-response cleanup, opens as kind=stream + HLS");
+
+// --- Oynatıcı seçimi: VLC (masaüstü) ve Android paketleri ---
+await sendMessageToBg({ type: "SET_SETTINGS", player: "vlc", androidPlayer: "vlc" });
+lastNativePayload = null;
+await sendMessageToBg(
+  { type: "OPEN_FROM_VIDEO_OVERLAY", preferredResolution: "best", currentSrc: "blob:x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-6" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" }, frameId: 0 }
+);
+assert.equal(lastNativePayload.payload.player, "vlc");
+
+simulateOldHost = true;
+lastNativePayload = null;
+const oldHostResp = await sendMessageToBg(
+  { type: "OPEN_FROM_VIDEO_OVERLAY", preferredResolution: "best", currentSrc: "blob:x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-6" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" }, frameId: 0 }
+);
+// Ping önbelleği 60 sn; eski host'u görmesi için önbelleği CHECK_HOST_STATUS ile zorla yenile ve tekrar dene
+if (oldHostResp.ok) {
+  await sendMessageToBg({ type: "CHECK_HOST_STATUS" });
+  lastNativePayload = null;
+  const retry = await sendMessageToBg(
+    { type: "OPEN_FROM_VIDEO_OVERLAY", preferredResolution: "best", currentSrc: "blob:x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-6" },
+    "abcdefghijklmnopabcdefghijklmnop",
+    { tab: { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" }, frameId: 0 }
+  );
+  assert.equal(retry.ok, false);
+  assert.equal(retry.statusCode, "NATIVE_HOST_OUTDATED");
+} else {
+  assert.equal(oldHostResp.statusCode, "NATIVE_HOST_OUTDATED");
+}
+assert.equal(lastNativePayload, null, "outdated host must not be asked to open (it would silently use mpv)");
+simulateOldHost = false;
+await sendMessageToBg({ type: "CHECK_HOST_STATUS" });
+
+simulatePlatformOs = "android";
+const vlcRes = await sendMessageToBg(
+  { type: "GET_VIDEO_RESOLUTIONS", currentSrc: "blob:x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-6" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" }, frameId: 0 }
+);
+assert.ok(vlcRes.androidIntents.best.includes(";package=org.videolan.vlc;"), vlcRes.androidIntents.best);
+assert.ok(!vlcRes.altIntents.vlc, "VLC alternative is redundant when VLC is already selected");
+assert.ok(vlcRes.altIntents.chooser && !vlcRes.altIntents.chooser.includes("package="), "chooser intent must not pin a package");
+
+await sendMessageToBg({ type: "SET_SETTINGS", androidPlayer: "mpv" });
+const mpvRes = await sendMessageToBg(
+  { type: "GET_VIDEO_RESOLUTIONS", currentSrc: "blob:x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-6" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 606, url: "https://www.anime.example/ep-6", title: "Ep 6" }, frameId: 0 }
+);
+assert.equal(mpvRes.disguisedHls, true);
+assert.ok(mpvRes.altIntents.vlc.includes(";package=org.videolan.vlc;"));
+// Uzantısız HLS'de seçici HLS MIME'ıyla açılır (ExoPlayer/Just Player gibi açamayan uygulamalar elenir)
+assert.ok(mpvRes.altIntents.chooser.includes(";type=application/x-mpegURL;"), mpvRes.altIntents.chooser);
+assert.ok(mpvRes.androidIntents.best.includes(";type=video/*;"), "main intent keeps video/* (mpv-android filter)");
+await sendMessageToBg({ type: "SET_SETTINGS", player: "mpv" });
+simulatePlatformOs = "mac";
+console.log("  [PASS] Player choice: VLC payload on desktop, outdated host blocked, Android VLC/chooser intents and disguised-HLS VLC hint");
+
+// Google Drive: dış Drive frame'i (N) doğrudan adresi kaydeder; iç YouTube-embed frame'i (akışı yok) ona düşer.
+// Aynı sekmedeki başka bir akışsız frame'e (örn. ana sayfa oynatıcısı) Drive kaydı verilmemeli.
+mockTabs.set(808, { id: 808, url: "https://www.anime.example/ep-7", title: "Ep 7" });
+const driveDirectUrl = "https://drive.usercontent.google.com/download?id=1A-JJSa4w5wywuqVr9_KSullSaiULQWGb&export=download&confirm=t";
+const driveReg = await sendMessageToBg(
+  { type: "REGISTER_EXTRACTED_STREAM", streamUrl: driveDirectUrl, format: "MP4", title: "ep7.mp4", pageUrl: "https://drive.google.com/file/d/1A-JJSa4w5wywuqVr9_KSullSaiULQWGb/preview", userAgent: "UA" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 808, url: "https://www.anime.example/ep-7", title: "Ep 7" }, frameId: 5, url: "https://drive.google.com/file/d/1A-JJSa4w5wywuqVr9_KSullSaiULQWGb/preview" }
+);
+assert.equal(driveReg.ok, true);
+const innerRes = await sendMessageToBg(
+  { type: "GET_VIDEO_RESOLUTIONS", currentSrc: "blob:https://youtube.googleapis.com/x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-7" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 808, url: "https://www.anime.example/ep-7", title: "Ep 7" }, frameId: 6, url: "https://youtube.googleapis.com/embed/?ps=docs&origin=https%3A%2F%2Fdrive.google.com" }
+);
+assert.equal(innerRes.ok, true);
+assert.equal(innerRes.mode, "direct", "Drive inner YouTube-embed frame falls back to the Drive file registered by its parent frame");
+const mainRes = await sendMessageToBg(
+  { type: "GET_VIDEO_RESOLUTIONS", currentSrc: "blob:https://www.anime.example/y", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-7" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 808, url: "https://www.anime.example/ep-7", title: "Ep 7" }, frameId: 0, url: "https://www.anime.example/ep-7" }
+);
+assert.notEqual(mainRes?.mode, "direct", `unrelated stream-less frame must not receive the Drive file: ${JSON.stringify(mainRes)}`);
+lastNativePayload = null;
+await sendMessageToBg(
+  { type: "OPEN_FROM_VIDEO_OVERLAY", currentSrc: "blob:https://www.anime.example/y", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://www.anime.example/ep-7", preferredResolution: "best" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 808, url: "https://www.anime.example/ep-7", title: "Ep 7" }, frameId: 0, url: "https://www.anime.example/ep-7" }
+);
+assert.ok(!JSON.stringify(lastNativePayload || {}).includes("drive.usercontent"), "main frame must not open the Drive file");
+console.log("  [PASS] Google Drive: inner viewer frame uses the parent's cookieless Drive file; unrelated frames do not");
 
 console.log("All background lifecycle & concurrency tests passed!");

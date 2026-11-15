@@ -148,6 +148,21 @@
       user-select: none;
     }
 
+    .player-select {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-primary);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      padding: 4px 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .player-select option {
+      background: #1b1d27;
+      color: #ffffff;
+    }
+
     .toggle-row input[type="checkbox"] {
       accent-color: var(--accent);
       cursor: pointer;
@@ -198,11 +213,17 @@
       Click the <strong>mpv</strong> button on the video player's bottom-right controls, or launch below.
     </p>
     <button id="openCurrentBtn" class="btn btn-primary" type="button">
-      Open Current Tab Video in mpv
+      Open Current Tab Video in <span class="player-name">mpv</span>
     </button>
     <a id="androidDirectLink" class="btn btn-primary" href="#" target="_blank" rel="noopener noreferrer" hidden>
-      Open in mpv-android
+      Open in <span class="player-name">mpv</span>
     </a>
+    <button id="androidMenuBtn" class="btn btn-primary" type="button" hidden>
+      Find stream on the video
+    </button>
+    <button id="allowNativeBtn" class="btn btn-primary" type="button" hidden>
+      Allow desktop player
+    </button>
     <button id="androidShareBtn" class="btn" type="button" hidden>
       Share Stream to App…
     </button>
@@ -211,6 +232,24 @@
   <div id="statusBanner" class="status-banner" role="status" aria-live="polite"></div>
 
   <div class="card">
+    <label class="toggle-row" id="desktopPlayerRow">
+      <span>Player</span>
+      <select id="playerSelect" class="player-select">
+        <option value="mpv">mpv</option>
+        <option value="vlc">VLC</option>
+      </select>
+    </label>
+    <label class="toggle-row" id="androidPlayerRow" hidden>
+      <span>Android player</span>
+      <select id="androidPlayerSelect" class="player-select">
+        <option value="mpv">mpv</option>
+        <option value="vlc">VLC</option>
+        <option value="mx">MX Player</option>
+        <option value="mxpro">MX Player Pro</option>
+        <option value="just">Just Player</option>
+        <option value="chooser">Ask every time</option>
+      </select>
+    </label>
     <label class="toggle-row">
       <span>Auto-open videos</span>
       <input type="checkbox" id="autoOpenToggle" />

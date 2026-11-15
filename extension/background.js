@@ -12,6 +12,8 @@ import {
   computeDedupeKey,
   inspectHlsPlaylistContent,
   isBlockedDomain,
+  isMediaSegment,
+  googleDriveDirectUrl,
   isValidHttpUrl,
   matchStreamForVideoContext,
   selectBestPlayableStream,
@@ -58,23 +60,51 @@ function sanitizeHeaderValue(val) {
 /**
  * Kalıcı kullanıcı ayarlarını chrome.storage.local'dan okur.
  */
-async function getSettings() {
-  const defaults = {
-    autoOpen: false, // Varsayılan olarak kesinlikle kapalı
-    ytdlpFallback: true, // YouTube/Twitch/Vimeo vb. sitelerde tek tıklamayla çalışması için varsayılan açık
-    blockedDomains: DEFAULT_BLOCKED_DOMAINS
+// Masaüstü native host'un başlatabildiği oynatıcılar (host tarafında da izin listesiyle doğrulanır)
+const DESKTOP_PLAYERS = ["mpv", "vlc"];
+
+// Android'de intent ile açılabilecek oynatıcılar. "chooser": paket belirtilmez, Android uygulama seçiciyi gösterir.
+const ANDROID_PLAYERS = {
+  mpv: { pkg: "is.xyz.mpv", label: "mpv" },
+  vlc: { pkg: "org.videolan.vlc", label: "VLC" },
+  mx: { pkg: "com.mxtech.videoplayer.ad", label: "MX Player" },
+  mxpro: { pkg: "com.mxtech.videoplayer.pro", label: "MX Player Pro" },
+  just: { pkg: "com.brouken.player", label: "Just Player" },
+  chooser: { pkg: "", label: "Choose app" }
+};
+
+const SETTINGS_KEYS = ["autoOpen", "ytdlpFallback", "blockedDomains", "player", "androidPlayer"];
+let settingsCache = null;
+
+function normalizeSettings(data = {}) {
+  return {
+    autoOpen: Boolean(data.autoOpen ?? false), // Varsayılan olarak kesinlikle kapalı
+    // YouTube/Twitch/Vimeo vb. sitelerde tek tıklamayla çalışması için varsayılan açık
+    ytdlpFallback: Boolean(data.ytdlpFallback ?? true),
+    blockedDomains: Array.isArray(data.blockedDomains) ? data.blockedDomains : DEFAULT_BLOCKED_DOMAINS,
+    player: DESKTOP_PLAYERS.includes(data.player) ? data.player : "mpv",
+    androidPlayer: Object.hasOwn(ANDROID_PLAYERS, data.androidPlayer || "") ? data.androidPlayer : "mpv"
   };
+}
+
+/**
+ * Kalıcı kullanıcı ayarlarını chrome.storage.local'dan okur.
+ * Her ağ isteğinde storage okumamak için bellekte önbelleklenir; storage.onChanged ile geçersiz kılınır.
+ */
+async function getSettings() {
+  if (settingsCache) return settingsCache;
   try {
-    const data = await chrome.storage.local.get(["autoOpen", "ytdlpFallback", "blockedDomains"]);
-    return {
-      autoOpen: Boolean(data.autoOpen ?? defaults.autoOpen),
-      ytdlpFallback: Boolean(data.ytdlpFallback ?? defaults.ytdlpFallback),
-      blockedDomains: Array.isArray(data.blockedDomains) ? data.blockedDomains : defaults.blockedDomains
-    };
+    const data = await chrome.storage.local.get(SETTINGS_KEYS);
+    settingsCache = normalizeSettings(data);
+    return settingsCache;
   } catch {
-    return defaults;
+    return normalizeSettings();
   }
 }
+
+chrome.storage.onChanged?.addListener((_changes, areaName) => {
+  if (areaName === "local") settingsCache = null;
+});
 
 /**
  * Yakalanan akışlar içerisinden aynı frame'deki alternatif çözünürlükleri (HLS Master veya
@@ -191,6 +221,7 @@ async function verifyHlsMasterIfNeeded(tabId, dedupeKey, streamUrl) {
       }
       if (verifiedInfo.variantsByHeight) {
         current.variantsByHeight = verifiedInfo.variantsByHeight;
+        current.variantsArePlaylists = true;
       }
       if (verifiedInfo.unsupportedReason) {
         current.unsupportedReason = verifiedInfo.unsupportedReason;
@@ -302,6 +333,11 @@ async function recordStreamCandidate(tabId, candidateData) {
           .sort((a, b) => b - a);
       }
 
+      if (typeof candidateData.variantsArePlaylists === "boolean") {
+        existing.variantsArePlaylists = candidateData.variantsArePlaylists;
+      }
+      if (candidateData.verifiedInPage) existing.verifiedInPage = true;
+
       if (candidateData.verified) {
         existing.verified = true;
         existing.priority = Math.min(existing.priority, candidateData.priority);
@@ -338,6 +374,8 @@ async function recordStreamCandidate(tabId, candidateData) {
           : undefined,
         variantsByHeight: candidateData.variantsByHeight || undefined,
         verified: Boolean(candidateData.verified),
+        variantsArePlaylists: Boolean(candidateData.variantsArePlaylists),
+        verifiedInPage: Boolean(candidateData.verifiedInPage),
         unsupportedReason: candidateData.unsupportedReason || null,
         capturedAt: now,
         updatedAt: now
@@ -441,14 +479,119 @@ async function scheduleAutoOpenIfEnabled(tabId) {
   autoOpenTimers.set(tabId, timerId);
 }
 
+// Akış taşıyamayacak istek türleri: bunlar için depolama yazımı / sınıflandırma yapılmaz (performans).
+// Not: HLS playlist'leri XHR/fetch ile geldiği için "xmlhttprequest" bilerek listede DEĞİLDİR.
+const IRRELEVANT_REQUEST_TYPES = new Set([
+  "image",
+  "imageset",
+  "stylesheet",
+  "font",
+  "script",
+  "ping",
+  "beacon",
+  "csp_report",
+  "websocket",
+  "web_manifest",
+  "speculative",
+  "xslt",
+  "xml_dtd"
+]);
+
+/**
+ * İsteğin akış adayı olabilecek (sekmeye ait, http(s), alakalı türde) bir istek olup olmadığını hızlıca kontrol eder.
+ */
+function isRelevantRequest(details) {
+  if (typeof details.tabId !== "number" || details.tabId < 0) return false;
+  if (details.type && IRRELEVANT_REQUEST_TYPES.has(details.type)) return false;
+  return isValidHttpUrl(details.url);
+}
+
+// Uzantısı / MIME türü belirsiz XHR yanıtları (örn. application/octet-stream olarak sunulan /w/<token> HLS
+// playlist'leri). Arka plan gövdeyi göremediği için bunlar yalnızca "aday" olarak tutulur; butona basıldığında
+// içerik betiği aynı frame içinden yeniden çekip #EXTM3U imzasını doğrular.
+const AMBIGUOUS_PLAYLIST_MIMES = new Set([
+  "",
+  "application/octet-stream",
+  "binary/octet-stream",
+  "application/binary",
+  "text/plain",
+  "application/force-download",
+  "application/unknown"
+]);
+const MAX_PROBE_CANDIDATES_PER_TAB = 20;
+// Yeniden çekilmesi yan etki doğurabilecek API uçları (örn. /api/watch/<id> her çağrıda yeni token üretir)
+const NON_PLAYLIST_PATH_RE = /\/(?:api|ajax|graphql|log|stats|ping|analytics|collect|track|auth)(?:\/|$)/i;
+
+/**
+ * Belirsiz bir XHR yanıtını, butona basıldığında doğrulanmak üzere sekmenin aday listesine ekler.
+ */
+async function recordProbeCandidate(tabId, candidate) {
+  let tabInfo = null;
+  try {
+    tabInfo = await chrome.tabs.get(tabId);
+  } catch {
+    return; // Sekme mevcut değil
+  }
+  await withSessionLock(async () => {
+    const key = `tab_${tabId}`;
+    const stored = await chrome.storage.session.get(key);
+    // Sekme durumu henüz oluşmadıysa (onUpdated'dan önce gelen XHR) burada oluştur; aday kaybolmasın
+    const tabState = stored[key] || {
+      tabId,
+      pageUrl: tabInfo?.url || "",
+      pageTitle: tabInfo?.title || "",
+      sessionId: `${tabId}_${Date.now()}`,
+      autoOpenedSessionId: null,
+      streams: []
+    };
+    const list = Array.isArray(tabState.probeCandidates) ? tabState.probeCandidates : [];
+    const filtered = list.filter((c) => c.url !== candidate.url);
+    filtered.unshift(candidate);
+    tabState.probeCandidates = filtered.slice(0, MAX_PROBE_CANDIDATES_PER_TAB);
+    await chrome.storage.session.set({ [key]: tabState });
+  });
+}
+
+// Drive videoplayback istekleri saniyede birkaç kez tekrarlanır; aynı frame/dosya için tek kayıt yeterli.
+const recordedDriveStreams = new Set();
+
+async function recordGoogleDriveStream(details, directUrl) {
+  const frameId = typeof details.frameId === "number" ? details.frameId : 0;
+  const key = `${details.tabId}:${frameId}:${directUrl}`;
+  if (recordedDriveStreams.has(key)) return;
+  recordedDriveStreams.add(key);
+  if (recordedDriveStreams.size > 200) recordedDriveStreams.clear();
+  await recordStreamCandidate(details.tabId, {
+    url: directUrl,
+    frameId,
+    referer: "",
+    userAgent: "",
+    format: "MP4",
+    streamType: "direct",
+    priority: STREAM_PRIORITY.DIRECT_MP4,
+    quality: "Original",
+    verified: true,
+    needsVerification: false
+  });
+}
+
 /**
  * webRequest.onSendHeaders: İstek URL'sini, Referer ve User-Agent başlıklarını requestId ile yakalar.
  */
 addWebRequestListener(
   chrome.webRequest.onSendHeaders,
   async (details) => {
-    if (details.tabId < 0) return;
-    if (!isValidHttpUrl(details.url)) return;
+    if (!isRelevantRequest(details)) return;
+    // Google Drive önizlemesi: çereze bağlı MSE parçaları yerine dosyanın çerezsiz doğrudan adresi kaydedilir
+    // (video iç içe youtube.googleapis.com iframe'inde oynar; kayıt o frame'e yapılır).
+    const driveDirect = googleDriveDirectUrl(details.url);
+    if (driveDirect) {
+      await recordGoogleDriveStream(details, driveDirect);
+      return;
+    }
+    // Video/ses segmentleri (.ts, .m4s, .jpeg kılıklı HLS parçaları vb.) her saniye onlarca istek üretir;
+    // bunlar için depolama kilidine girmeden erken çık.
+    if (isMediaSegment(details.url)) return;
 
     const settings = await getSettings();
     if (isBlockedDomain(details.url, settings.blockedDomains)) return;
@@ -605,8 +748,8 @@ chrome.webRequest.onBeforeRedirect?.addListener(
 addWebRequestListener(
   chrome.webRequest.onHeadersReceived,
   async (details) => {
-    if (details.tabId < 0) return;
-    if (!isValidHttpUrl(details.url)) return;
+    if (!isRelevantRequest(details)) return;
+    if (isMediaSegment(details.url)) return;
 
     // 3xx yönlendirme yanıtlarında pending kaydını silme; onBeforeRedirect hedef CDN adresini devralacak
     if (typeof details.statusCode === "number" && details.statusCode >= 300 && details.statusCode < 400) {
@@ -653,11 +796,37 @@ addWebRequestListener(
           const tabState = stored[tabKey];
           if (!tabState || !Array.isArray(tabState.streams)) return;
           const beforeLen = tabState.streams.length;
-          tabState.streams = tabState.streams.filter((s) => s.dedupeKey !== rejectedDedupe);
+          // Yalnızca URL uzantısından tahmin edilmiş, doğrulanmamış doğrudan dosya (MP4/WebM) kayıtlarını sil.
+          // Sayfa içinde doğrulanmış / kaydedilmiş HLS playlist'leri (örn. 218 baytlık /w/<token> master)
+          // küçük oldukları için silinmemeli.
+          tabState.streams = tabState.streams.filter(
+            (s) => !(s.dedupeKey === rejectedDedupe && !s.verified && s.format !== "HLS")
+          );
           if (tabState.streams.length !== beforeLen) {
             await chrome.storage.session.set({ [tabKey]: tabState });
             await updateTabBadge(details.tabId, tabState.streams);
           }
+        });
+      }
+
+      // Uzantısız ve MIME türü belirsiz XHR yanıtı: gizlenmiş bir HLS playlist'i olabilir (örn. /w/<token>,
+      // application/octet-stream). Gövde burada görülemediği için yalnızca doğrulama adayı olarak sakla.
+      const lowerMime = (contentType || "").toLowerCase().split(";")[0].trim();
+      const statusOk = details.statusCode === 200 || details.statusCode === 206 || details.statusCode === undefined;
+      if (
+        details.type === "xmlhttprequest" &&
+        statusOk &&
+        !NON_PLAYLIST_PATH_RE.test(new URL(details.url).pathname) &&
+        AMBIGUOUS_PLAYLIST_MIMES.has(lowerMime) &&
+        (contentLength === null || contentLength <= 2 * 1024 * 1024)
+      ) {
+        await recordProbeCandidate(details.tabId, {
+          url: details.url,
+          frameId: typeof details.frameId === "number" ? details.frameId : reqMeta?.frameId ?? 0,
+          referer: reqMeta?.referer || sanitizeHeaderValue(details.initiator || ""),
+          userAgent: reqMeta?.userAgent || "",
+          mime: lowerMime,
+          at: Date.now()
         });
       }
       return;
@@ -776,18 +945,21 @@ async function isAndroidPlatform() {
  * 2) Bare Browser (Patch 0110) "Open links in apps = Never" durumunda S.browser_fallback_url varsa
  *    sekmeyi zorla o adrese yönlendirdiği için S.browser_fallback_url eklenmez.
  */
-function buildAndroidMpvIntentUri(streamUrl, title = "") {
+function buildAndroidMpvIntentUri(
+  streamUrl,
+  title = "",
+  playerKey = settingsCache?.androidPlayer || "mpv",
+  mimeType = "video/*"
+) {
   const parsed = new URL(streamUrl);
   const scheme = parsed.protocol.replace(":", "");
   const cleanHostAndPath = `${parsed.host}${parsed.pathname}${parsed.search}`;
+  const pkg = (ANDROID_PLAYERS[playerKey] || ANDROID_PLAYERS.mpv).pkg;
 
-  const parts = [
-    `intent://${cleanHostAndPath}#Intent`,
-    `scheme=${scheme}`,
-    `package=is.xyz.mpv`,
-    `action=android.intent.action.VIEW`,
-    `type=video/*`
-  ];
+  const parts = [`intent://${cleanHostAndPath}#Intent`, `scheme=${scheme}`];
+  // "chooser" seçiliyse paket belirtilmez; Android video/* işleyebilen uygulamaları listeler.
+  if (pkg) parts.push(`package=${pkg}`);
+  parts.push(`action=android.intent.action.VIEW`, `type=${mimeType}`);
 
   const cleanTitle = sanitizeHeaderValue(title);
   if (cleanTitle) {
@@ -796,6 +968,51 @@ function buildAndroidMpvIntentUri(streamUrl, title = "") {
 
   parts.push("end");
   return `${parts.join(";")};`;
+}
+
+/**
+ * Uzantısı .m3u8 olmayan (örn. /w/<token>) HLS akışı mı? FFmpeg 7.1+ bunları uzantı/MIME kontrolü yüzünden
+ * kendiliğinden HLS olarak açmaz; mpv-android'e intent ile demuxer seçeneği iletilemediği için VLC önerilir.
+ */
+function isDisguisedHls(record) {
+  if (!record || record.format !== "HLS" || !record.verifiedInPage) return false;
+  try {
+    const p = new URL(record.url).pathname.toLowerCase();
+    return !(p.endsWith(".m3u8") || p.endsWith(".m3u"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Açılacak URL'nin kendisi bir HLS playlist'i mi? Kaydın kendi URL'si (HLS formatındaysa) ya da doğrulanmış bir
+ * master'dan çıkarılmış variant olmalı. OK.ru / VK'nın MP4 çözünürlük dosyalarında HLS demuxer'ı zorlanmamalı.
+ */
+function isOpeningPlaylist(record, targetUrl) {
+  if (!record || record.format !== "HLS") return false;
+  if (targetUrl === record.url) return true;
+  return Boolean(
+    record.variantsArePlaylists &&
+      record.variantsByHeight &&
+      Object.values(record.variantsByHeight).includes(targetUrl)
+  );
+}
+
+/**
+ * Android menüsünde seçili oynatıcıya ek olarak sunulan alternatif intent'ler (VLC ve uygulama seçici).
+ */
+function buildAndroidAltIntents(streamUrl, title, disguisedHls = false) {
+  if (!isValidHttpUrl(streamUrl)) return {};
+  // Uzantısız HLS'de seçici HLS MIME tipiyle açılır; intent filtresi eşleşmesi büyük/küçük harfe duyarlıdır.
+  // Emülatörde: "application/x-mpegURL" yalnızca VLC'yi listeler (açabiliyor). "application/vnd.apple.mpegurl"
+  // ise MX Player ve VLC'nin yanında bu akışı açamayan mpv-android ve Google Photos'u da listeler. Seçicinin amacı
+  // yalnızca açabilen uygulamaları göstermek; MX kullanıcıları menüde "Open in MX Player"ı zaten görür.
+  const chooserMime = disguisedHls ? "application/x-mpegURL" : "video/*";
+  const alt = { chooser: buildAndroidMpvIntentUri(streamUrl, title, "chooser", chooserMime) };
+  if ((settingsCache?.androidPlayer || "mpv") !== "vlc") {
+    alt.vlc = buildAndroidMpvIntentUri(streamUrl, title, "vlc");
+  }
+  return alt;
 }
 
 /**
@@ -862,11 +1079,12 @@ async function openStreamInMpv(streamRecord, options = {}) {
   const ageMs = Date.now() - (latestRecord.updatedAt || latestRecord.capturedAt || Date.now());
   const mightBeExpired = ageMs > 45 * 60 * 1000;
 
+  const settings = await getSettings();
   const isAndroid = await isAndroidPlatform();
   if (isAndroid) {
     // Android üzerinde doğrudan sayfa içi kullanıcı tıklamasıyla (user gesture) açılabilmesi için
     // intentUri'yi yanıt içinde döndür; eğer popup'tan veya otomatik açmadan çağrıldıysa tabs.update/create dene.
-    const intentUri = buildAndroidMpvIntentUri(targetUrl, latestRecord.tabTitle || "");
+    const intentUri = buildAndroidMpvIntentUri(targetUrl, latestRecord.tabTitle || "", settings.androidPlayer);
     if (!options.returnIntentOnly) {
       try {
         if (typeof latestRecord.tabId === "number" && latestRecord.tabId >= 0) {
@@ -888,33 +1106,67 @@ async function openStreamInMpv(streamRecord, options = {}) {
       statusCode: "ANDROID_INTENT_READY",
       intentUri,
       streamUrl: targetUrl,
-      message: "Opening in mpv-android...",
+      message: `Opening in ${(ANDROID_PLAYERS[settings.androidPlayer] || ANDROID_PLAYERS.mpv).label}...`,
       headerWarning: latestRecord.referer
-        ? "Note: mpv-android does not natively support HTTP Referer/User-Agent via Android Intents."
+        ? "Note: Android players cannot receive HTTP Referer/User-Agent via Android Intents."
         : null,
       mightBeExpired
     };
   }
 
-  // Masaüstü (macOS): Native Messaging üzerinden com.talha.mpv ile iletişim kur
-  const settings = await getSettings();
+  // Masaüstü (macOS / Linux): Native Messaging üzerinden com.talha.mpv ile iletişim kur.
+  // kind: yakalanmış gerçek akış ("stream") ile yt-dlp'nin çözmesi gereken sayfa URL'sini ("page") ayırır;
+  // böylece uzantısız HLS akışları (örn. /w/<token>) Referer/User-Agent başlıklarını kaybetmez.
+  const isPageFallback = latestRecord.streamType === "page_fallback";
+  const player = DESKTOP_PLAYERS.includes(options.player) ? options.player : settings.player;
   const payload = {
     action: "open",
+    kind: isPageFallback ? "page" : "stream",
+    player,
     url: targetUrl,
     referer: sanitizeHeaderValue(latestRecord.referer || ""),
     user_agent: sanitizeHeaderValue(latestRecord.userAgent || ""),
+    title: sanitizeHeaderValue(latestRecord.tabTitle || "").slice(0, 200),
     tab_id: typeof latestRecord.tabId === "number" ? latestRecord.tabId : -1,
-    use_ytdlp_fallback: Boolean(options.useYtdlpFallback ?? settings.ytdlpFallback),
+    use_ytdlp_fallback: isPageFallback && Boolean(options.useYtdlpFallback ?? settings.ytdlpFallback),
+    // Doğrulanmış HLS (uzantısız /w/<token> dahil) -> host mpv'de HLS demuxer'ını zorlayabilsin
+    stream_format: !isPageFallback && isOpeningPlaylist(latestRecord, targetUrl) ? "hls" : "",
     preferred_resolution: String(requestedResolution)
   };
 
+  if (!(await hasNativeMessagingPermission())) {
+    return { ...NATIVE_PERMISSION_ERROR, mightBeExpired };
+  }
+
   try {
+    // mpv dışındaki bir oynatıcı seçiliyse, eski bir ~/mpv_host kopyası "player" alanını yok sayıp sessizce
+    // mpv açmasın diye host sürümünü önce doğrula.
+    if (player !== "mpv") {
+      const hostInfo = await getNativeHostInfo();
+      if (hostInfo && !hostInfo.host_version) {
+        return {
+          ok: false,
+          statusCode: "NATIVE_HOST_OUTDATED",
+          errorMessage: `The installed native host is outdated and cannot launch ${player}. Run 'make' in the stream-to-mpv folder again.`,
+          mightBeExpired
+        };
+      }
+      if (hostInfo?.players && hostInfo.players[player] === false) {
+        return {
+          ok: false,
+          statusCode: `${player.toUpperCase()}_NOT_INSTALLED`,
+          errorMessage: `${player === "vlc" ? "VLC" : player} is not installed on this computer.`,
+          mightBeExpired
+        };
+      }
+    }
+
     const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, payload);
     if (!response || !response.ok) {
       return {
         ok: false,
         statusCode: response?.error_code || "HOST_ERROR",
-        errorMessage: response?.error || "mpv could not be started by native host.",
+        errorMessage: response?.error || `${player} could not be started by native host.`,
         mightBeExpired
       };
     }
@@ -946,6 +1198,50 @@ async function openStreamInMpv(streamRecord, options = {}) {
 }
 
 /**
+ * Firefox paketinde "nativeMessaging" isteğe bağlı izindir (Firefox for Android bu izni ayrıcalıklı sayar ve
+ * zorunlu olarak istenirse eklentiyi hiç yüklemez). Masaüstü Firefox'ta kullanıcı popup'tan bir kez izin verir.
+ */
+async function hasNativeMessagingPermission() {
+  if (typeof chrome.runtime.sendNativeMessage === "function") {
+    try {
+      if (chrome.permissions?.contains) {
+        return await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
+      }
+    } catch {
+      // Bazı tarayıcılar bu sorguyu desteklemeyebilir; API mevcutsa izin var kabul et
+    }
+    return true;
+  }
+  return false;
+}
+
+const NATIVE_PERMISSION_ERROR = {
+  ok: false,
+  statusCode: "NATIVE_PERMISSION_REQUIRED",
+  errorMessage:
+    "Desktop player access is not allowed yet. Click the Stream to mpv toolbar icon and press 'Allow desktop player'."
+};
+
+// Native host ping sonucunu kısa süre önbellekle (her açılışta ayrı python süreci başlatmamak için)
+let nativeHostInfoCache = null;
+async function getNativeHostInfo({ force = false } = {}) {
+  if (!(await hasNativeMessagingPermission())) {
+    throw new Error("NATIVE_PERMISSION_REQUIRED");
+  }
+  if (!force && nativeHostInfoCache && Date.now() - nativeHostInfoCache.at < 60 * 1000) {
+    return nativeHostInfoCache.info;
+  }
+  try {
+    const info = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, { action: "ping" });
+    nativeHostInfoCache = { at: Date.now(), info };
+    return info;
+  } catch (err) {
+    nativeHostInfoCache = null;
+    throw err;
+  }
+}
+
+/**
  * Popup arayüzünden gelen mesajları dinler.
  * Güvenlik: Yalnızca kendi eklenti kimliğimizden (chrome.runtime.id) gelen mesajları kabul et;
  * rastgele web sitelerinden veya dış kaynaklardan gelen mesajları reddet.
@@ -958,6 +1254,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   (async () => {
     try {
+      // Android intent üretimi oynatıcı seçimine bağlı olduğundan ayarların önbelleğe alındığından emin ol
+      await getSettings();
       switch (message?.type) {
         case "GET_STATE": {
           const allSession = await chrome.storage.session.get(null);
@@ -989,10 +1287,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 : current.ytdlpFallback,
             blockedDomains: Array.isArray(message.blockedDomains)
               ? message.blockedDomains
-              : current.blockedDomains
+              : current.blockedDomains,
+            player: DESKTOP_PLAYERS.includes(message.player) ? message.player : current.player,
+            androidPlayer: Object.hasOwn(ANDROID_PLAYERS, message.androidPlayer || "")
+              ? message.androidPlayer
+              : current.androidPlayer
           };
           await chrome.storage.local.set(next);
-          sendResponse({ ok: true, settings: next });
+          settingsCache = normalizeSettings(next);
+          sendResponse({ ok: true, settings: settingsCache });
           break;
         }
 
@@ -1062,9 +1365,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
 
+          // İçerik betiği gizlenmiş bir playlist'i (#EXTM3U) sayfa bağlamında doğruladıysa metnini gönderir;
+          // master/variant/DRM ayrımı ve çözünürlük haritası burada stream_utils ile yeniden hesaplanır.
+          let playlistInfo = null;
+          if (typeof message.playlistText === "string" && message.playlistText.length <= 256 * 1024) {
+            playlistInfo = inspectHlsPlaylistContent(message.playlistText, null, streamUrl);
+            if (playlistInfo?.streamType === "unsupported") {
+              sendResponse({
+                ok: false,
+                statusCode: "UNSUPPORTED_STREAM",
+                errorMessage: playlistInfo.unsupportedReason || "Unsupported DRM stream."
+              });
+              return;
+            }
+          }
+
           const cleanVariants = {};
-          if (message.variantsByHeight && typeof message.variantsByHeight === "object") {
-            for (const [k, v] of Object.entries(message.variantsByHeight)) {
+          const rawVariants =
+            message.variantsByHeight && typeof message.variantsByHeight === "object" &&
+            Object.keys(message.variantsByHeight).length > 0
+              ? message.variantsByHeight
+              : playlistInfo?.variantsByHeight || null;
+          if (rawVariants) {
+            for (const [k, v] of Object.entries(rawVariants)) {
               const h = parseInt(String(k), 10);
               if (!Number.isNaN(h) && h >= 144 && h <= 4320 && isValidHttpUrl(v)) {
                 cleanVariants[h] = v;
@@ -1076,8 +1399,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             .sort((a, b) => b - a);
 
           const isHls =
-            message.format === "HLS" || /\.m3u8(?:$|[/?#])/i.test(streamUrl);
+            Boolean(playlistInfo) || message.format === "HLS" || /\.m3u8(?:$|[/?#])/i.test(streamUrl);
           const hasMultiHeights = heights.length > 0;
+          const verifiedInPage = Boolean(playlistInfo);
 
           let effectiveStreamUrl = streamUrl;
           if (typeof tabId === "number" && tabId >= 0) {
@@ -1092,11 +1416,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 isHls || hasMultiHeights
                   ? STREAM_PRIORITY.VERIFIED_HLS_MASTER
                   : STREAM_PRIORITY.DIRECT_MP4,
-              quality: hasMultiHeights ? `Up to ${heights[0]}p` : null,
+              quality: hasMultiHeights ? `Up to ${heights[0]}p` : playlistInfo?.quality || null,
               availableHeights: hasMultiHeights ? heights : undefined,
               variantsByHeight: hasMultiHeights ? cleanVariants : undefined,
-              verified: hasMultiHeights,
-              needsVerification: isHls && !hasMultiHeights
+              // Variant'lar ancak sayfa içinde doğrulanmış bir master'dan çıkarıldıysa HLS playlist'tir;
+              // OK.ru / VK gibi sağlayıcıların çözünürlük haritası doğrudan MP4 dosyalarıdır.
+              variantsArePlaylists: hasMultiHeights && Boolean(playlistInfo?.variantsByHeight) && rawVariants === playlistInfo.variantsByHeight,
+              verifiedInPage,
+              verified: hasMultiHeights || verifiedInPage,
+              // Sayfa içinde doğrulanan (token'lı) playlist'leri arka planda çerezsiz/Referer'sız yeniden çekme
+              needsVerification: isHls && !hasMultiHeights && !verifiedInPage
             });
 
             const storedTab = await chrome.storage.session.get(`tab_${tabId}`);
@@ -1128,6 +1457,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           }
 
+          const registeredDisguised = isDisguisedHls({ url: effectiveStreamUrl, format: isHls ? "HLS" : "MP4", verifiedInPage });
           sendResponse({
             ok: true,
             isAndroid,
@@ -1135,8 +1465,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             heights,
             streamUrls,
             androidIntents,
+            altIntents: isAndroid ? buildAndroidAltIntents(effectiveStreamUrl, title, registeredDisguised) : {},
+            disguisedHls: registeredDisguised,
+            androidPlayer: settingsCache?.androidPlayer || "mpv",
             intentUri: isAndroid ? androidIntents.best : null
           });
+          break;
+        }
+
+        case "GET_PROBE_CANDIDATES": {
+          // Butona basılan frame'de yakalanmış, MIME türü belirsiz XHR yanıtları (gizlenmiş playlist adayları)
+          const tabId = sender.tab?.id;
+          const frameId = typeof sender.frameId === "number" ? sender.frameId : 0;
+          if (typeof tabId !== "number" || tabId < 0) {
+            sendResponse({ ok: true, candidates: [] });
+            return;
+          }
+          const stored = await chrome.storage.session.get(`tab_${tabId}`);
+          const list = stored[`tab_${tabId}`]?.probeCandidates || [];
+          const candidates = list
+            .filter((c) => c && isValidHttpUrl(c.url) && (typeof c.frameId !== "number" || c.frameId === frameId))
+            .slice(0, 8)
+            .map((c) => ({ url: c.url, mime: c.mime || "", at: c.at || 0 }));
+          sendResponse({ ok: true, candidates });
           break;
         }
 
@@ -1261,7 +1612,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sources: Array.isArray(message.sources) ? message.sources : [],
             videoCountInFrame: typeof message.videoCountInFrame === "number" ? message.videoCountInFrame : 1,
             actionTimestamp: message.actionTimestamp || Date.now(),
-            pageUrl: message.pageUrl || sender.tab?.url || ""
+            pageUrl: message.pageUrl || sender.tab?.url || "",
+            frameUrl: sender.url || ""
           });
 
           const preferredResolution = message.preferredResolution || "best";
@@ -1282,7 +1634,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             // Masaüstü: doğrudan HLS/MP4 akışı yakalanmadıysa (örneğin YouTube MSE videoplayback parçaları),
             // yt-dlp fallback ile sayfa URL'sini doğrudan mpv'ye gönder
-            const candidatePageUrl = message.pageUrl || sender.tab?.url || "";
+            // Sarmalayıcı gömmelerde (örn. ?id=https://ok.ru/videoembed/...) yt-dlp'ye içteki gerçek adres verilir
+            const candidatePageUrl = isValidHttpUrl(message.fallbackPageUrl)
+              ? message.fallbackPageUrl
+              : message.pageUrl || sender.tab?.url || "";
             if (
               matched.reason === "NO_VIDEO_DETECTED" &&
               settings.ytdlpFallback !== false &&
@@ -1291,7 +1646,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               const res = await openStreamInMpv(
                 {
                   url: candidatePageUrl,
-                  referer: candidatePageUrl,
+                  referer: message.pageUrl || candidatePageUrl,
                   userAgent: "",
                   tabId,
                   frameId,
@@ -1346,7 +1701,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sources: Array.isArray(message.sources) ? message.sources : [],
             videoCountInFrame: typeof message.videoCountInFrame === "number" ? message.videoCountInFrame : 1,
             actionTimestamp: message.actionTimestamp || Date.now(),
-            pageUrl: message.pageUrl || sender.tab?.url || ""
+            pageUrl: message.pageUrl || sender.tab?.url || "",
+            frameUrl: sender.url || ""
           });
 
           if (matched.stream) {
@@ -1369,6 +1725,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               }
             }
 
+            const extra = {
+              altIntents: isAndroid ? buildAndroidAltIntents(latest.url, tabTitle, isDisguisedHls(latest)) : {},
+              disguisedHls: isDisguisedHls(latest),
+              androidPlayer: settingsCache?.androidPlayer || "mpv"
+            };
             if (heights.length > 0) {
               sendResponse({
                 ok: true,
@@ -1376,7 +1737,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 mode: "hls_master",
                 heights,
                 androidIntents,
-                streamUrls
+                streamUrls,
+                ...extra
               });
               return;
             }
@@ -1386,7 +1748,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               mode: "direct",
               heights: [],
               androidIntents,
-              streamUrls
+              streamUrls,
+              ...extra
             });
             return;
           }
@@ -1420,24 +1783,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               ok: true,
               platform: "android",
               hostInstalled: true,
-              mpvAvailable: true
+              mpvAvailable: true,
+              androidPlayers: Object.fromEntries(
+                Object.entries(ANDROID_PLAYERS).map(([k, v]) => [k, v.label])
+              )
             });
             return;
           }
 
           try {
-            const resp = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, { action: "ping" });
+            const resp = await getNativeHostInfo({ force: true });
+            const selected = (await getSettings()).player;
+            const players = resp?.players && typeof resp.players === "object"
+              ? resp.players
+              : { mpv: Boolean(resp?.mpv_available) };
             sendResponse({
               ok: true,
-              platform: "mac",
+              platform: "desktop",
               hostInstalled: Boolean(resp?.ok),
+              hostVersion: resp?.host_version || null,
+              hostOutdated: Boolean(resp?.ok) && !resp?.host_version,
               mpvAvailable: Boolean(resp?.mpv_available),
+              players,
+              selectedPlayerAvailable: Boolean(players[selected]),
+              ytdlpAvailable: resp?.ytdlp_available ?? null,
               extensionId: chrome.runtime.id
             });
           } catch (err) {
             sendResponse({
               ok: true,
-              platform: "mac",
+              platform: "desktop",
+              permissionRequired: err?.message === "NATIVE_PERMISSION_REQUIRED",
               hostInstalled: false,
               mpvAvailable: false,
               extensionId: chrome.runtime.id,

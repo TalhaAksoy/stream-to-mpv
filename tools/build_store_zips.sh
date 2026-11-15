@@ -3,7 +3,8 @@
 #
 # - chrome-web-store.zip: "key" alanı (Web Store kabul etmez), Firefox'a özel
 #   "browser_specific_settings" ve "background.scripts" alanları çıkarılır.
-# - firefox-amo.zip: "key" ve Firefox'un desteklemediği "background.service_worker" çıkarılır.
+# - firefox-amo.zip: "key" ve Firefox'un desteklemediği "background.service_worker" çıkarılır;
+#   "nativeMessaging" isteğe bağlı izne taşınır (Firefox for Android uyumluluğu).
 #
 # Kaynak extension/manifest.json değiştirilmez; yerel geliştirmede sabit ID için "key" korunur.
 
@@ -40,6 +41,14 @@ if target == "chrome":
     background.pop("scripts", None)
 else:
     background.pop("service_worker", None)
+    # Firefox for Android "nativeMessaging"i ayrıcalıklı izin sayar; zorunlu istenirse eklenti Android'e
+    # hiç kurulamaz. İsteğe bağlı yapılır; masaüstü Firefox'ta popup'taki "Allow desktop player" ile istenir.
+    perms = manifest.get("permissions", [])
+    if "nativeMessaging" in perms:
+        manifest["permissions"] = [p for p in perms if p != "nativeMessaging"]
+        optional = manifest.setdefault("optional_permissions", [])
+        if "nativeMessaging" not in optional:
+            optional.append("nativeMessaging")
 
 with open(dst, "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2, ensure_ascii=False)

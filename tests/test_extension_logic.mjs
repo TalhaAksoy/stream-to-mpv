@@ -12,6 +12,7 @@ import {
   inspectHlsPlaylistContent,
   isBlockedDomain,
   isMediaSegment,
+  googleDriveDirectUrl,
   matchStreamForVideoContext,
   selectBestPlayableStream,
   sortStreams
@@ -97,6 +98,15 @@ test("Scenario 3: Chunklist / variant playlist detection (including r_file=chunk
 test("Media segments (.ts, .m4s, small init segments) are ignored", () => {
   assert.equal(isMediaSegment("https://cdn.example.com/seg-102.ts", "video/mp2t"), true);
   assert.equal(isMediaSegment("https://cdn.example.com/chunk-001.m4s", "video/iso.segment"), true);
+  // Google Drive önizleme MSE parçaları (çereze bağlı) elenir; çerezsiz usercontent indirme adresi akış sayılır
+  assert.equal(isMediaSegment("https://rr5---sn-nv47lnsy.c.drive.google.com/videoplayback?expire=1&itag=18", "video/mp4"), true);
+  assert.equal(isMediaSegment("https://drive.usercontent.google.com/download?id=1A-JJSa4w5wywuqVr9_KSullSaiULQWGb&export=download&confirm=t", "video/mp4"), false);
+  assert.equal(
+    googleDriveDirectUrl("https://rr5---sn-nv47lnsy.c.drive.google.com/videoplayback?expire=1&itag=134&source=webdrive&driveid=1A-JJSa4w5wywuqVr9_KSullSaiULQWGb&range=0-1000"),
+    "https://drive.usercontent.google.com/download?id=1A-JJSa4w5wywuqVr9_KSullSaiULQWGb&export=download&confirm=t"
+  );
+  assert.equal(googleDriveDirectUrl("https://rr1---sn-x.googlevideo.com/videoplayback?driveid=1A-JJSa4w5wywuqVr9_KSullSaiULQWGb"), "");
+  assert.equal(googleDriveDirectUrl("https://rr5---sn-x.c.drive.google.com/videoplayback?driveid=../../x"), "");
   assert.equal(classifyCandidate("https://cdn.example.com/seg-102.ts", "video/mp2t"), null);
   // Küçük boyutlu (12 KB) MP4 init segmenti elenmeli
   assert.equal(classifyCandidate("https://cdn.example.com/init.mp4", "video/mp4", 12_000), null);

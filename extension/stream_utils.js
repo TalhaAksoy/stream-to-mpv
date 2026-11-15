@@ -181,6 +181,13 @@ export function isMediaSegment(rawUrl, contentType = "") {
       return true;
     }
 
+    // Google Drive önizleme oynatıcısının MSE parçaları: çereze bağlı ve ayrık ses/görüntü izleri, harici oynatıcıda
+    // açılamaz (content.js Drive gömmeleri için çerezsiz drive.usercontent.google.com adresini kaydeder).
+    const driveHost = parsed.hostname.toLowerCase();
+    if (driveHost.endsWith(".c.drive.google.com") || driveHost.endsWith(".c.docs.google.com")) {
+      if (lowerPath === "/videoplayback") return true;
+    }
+
     // VK / OK.ru CDN'lerinde (vkuser.net / okcdn.ru) DASH ayrık iz parçaları (ct=1/4/6 veya video/webm);
     // ct=0 (tam MP4) ve .m3u8 / ct=8 (HLS) akışlarına izin verilir.
     const lowerHost = parsed.hostname.toLowerCase();
@@ -200,6 +207,45 @@ export function isMediaSegment(rawUrl, contentType = "") {
     return false;
   } catch {
     return true;
+  }
+}
+
+/**
+ * Google Drive önizleme oynatıcısının videoplayback isteğinden (…c.drive.google.com/videoplayback?driveid=<id>)
+ * dosyanın çerezsiz, Range destekli orijinal MP4 adresini üretir. Drive'ın kendi videoplayback adresleri
+ * DRIVE_STREAM çerezine bağlıdır ve MSE için ayrık izlerdir; harici oynatıcıda açılamaz. Eşleşmezse "" döner.
+ */
+function isGoogleDriveDirectStreamUrl(rawUrl) {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase() === "drive.usercontent.google.com";
+  } catch {
+    return false;
+  }
+}
+
+/** Drive önizleme sayfası veya içindeki YouTube-embed (ps=docs) oynatıcı frame'i mi? */
+function isGoogleDriveViewerFrame(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (host === "drive.google.com" || host === "docs.google.com") return true;
+    return host === "youtube.googleapis.com" && parsed.searchParams.get("ps") === "docs";
+  } catch {
+    return false;
+  }
+}
+
+export function googleDriveDirectUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (!(host.endsWith(".c.drive.google.com") || host.endsWith(".c.docs.google.com"))) return "";
+    if (parsed.pathname.toLowerCase() !== "/videoplayback") return "";
+    const id = parsed.searchParams.get("driveid") || "";
+    if (!/^[A-Za-z0-9_-]{20,}$/.test(id)) return "";
+    return `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`;
+  } catch {
+    return "";
   }
 }
 
@@ -579,7 +625,18 @@ export function matchStreamForVideoContext(streams, videoContext = {}) {
   const sameFrameStreams = safeStreams.filter(
     (s) => typeof s.frameId !== "number" || s.frameId === frameId
   );
-  const candidatePool = sameFrameStreams.length > 0 ? sameFrameStreams : safeStreams;
+  // Drive dosya kayıtları dış Drive frame'inde tutulur ama video iç içe YouTube-embed frame'inde oynar. Başka
+  // frame'e düşme yalnızca Drive görüntüleyici frame'lerine açıktır; aynı sekmedeki başka bir oynatıcıya
+  // (örn. kaynak değiştirilen ana sayfa oynatıcısı) Drive dosyası verilmez.
+  const driveViewer = isGoogleDriveViewerFrame(videoContext.frameUrl);
+  let candidatePool = sameFrameStreams;
+  if (sameFrameStreams.length === 0) {
+    const driveStreams = safeStreams.filter((s) => isGoogleDriveDirectStreamUrl(s.url));
+    candidatePool =
+      driveViewer && driveStreams.length > 0
+        ? driveStreams
+        : safeStreams.filter((s) => !isGoogleDriveDirectStreamUrl(s.url));
+  }
 
   // Eğer tamamı DRM/desteklenmeyen ise hemen bildir
   const playablePool = candidatePool.filter(

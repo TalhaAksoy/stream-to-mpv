@@ -18,6 +18,8 @@
 - **YouTube SABR `403`-Safe Playback (macOS & Android):**
   - On **macOS**, prioritizes HLS (`m3u8`) formats via `mpv` + `yt-dlp` for smooth 1080p60/4K playback without closing.
   - On **Android**, extracts YouTube's direct HLS Master `.m3u8` stream in-browser so `mpv-android` plays video + audio directly without requiring `yt-dlp`.
+- **Disguised & Extensionless HLS Detection:** Finds playlists that hide behind URLs without an extension and a generic MIME type (e.g. `/w/<token>` served as `application/octet-stream` with segments disguised as `.jpeg`) by verifying the `#EXTM3U` signature *inside the player's own frame* (same Referer/origin as the player). It also reads the real source directly from **JWPlayer** player objects (tested), with best-effort readers for Video.js, ArtPlayer, DPlayer, Clappr and Plyr, so encrypted-config wrapper embeds work too.
+- **Choose Your Player:** Desktop: **mpv** or **VLC**. Android: **mpv**, **VLC**, **MX Player**, **Just Player**, or **"Ask every time"** (Android app chooser). The on-video menu always offers **Open in VLC** and **Open with…** as alternatives on Android.
 - **Zero-Configuration Setup:** No manual Extension ID copying or JSON editing — running `make` installs and verifies everything automatically.
 
 ---
@@ -34,6 +36,7 @@
 | **Homebrew** | Recommended | Used by `make` to auto-install `mpv` and `yt-dlp` (`https://brew.sh`) |
 | **mpv** | Required | Auto-installed via `make` if missing (`brew install mpv`) |
 | **yt-dlp** | Recommended | For YouTube/Twitch/MSE sites (`make` auto-installs `brew install yt-dlp`) |
+| **VLC** *(Optional)* | Optional | Pick **VLC** instead of mpv in the extension popup (`brew install --cask vlc`) |
 | **deno** *(Optional)* | Recommended | Speeds up `yt-dlp` YouTube JS challenge solving (`brew install deno`) |
 
 ### 2. Desktop (Linux)
@@ -43,13 +46,14 @@
 | **Browser** | Required | Chromium, Google Chrome, Brave, Microsoft Edge, Vivaldi, Thorium, Firefox, or LibreWolf |
 | **Python 3** | Required | `python3` from your distribution |
 | **mpv** | Required | Install with your package manager (`sudo pacman -S mpv`, `sudo apt install mpv`, …) |
-| **yt-dlp** | Recommended | For YouTube/Twitch/MSE sites (`sudo pacman -S yt-dlp` or `pipx install yt-dlp`) |
+| **yt-dlp** | Recommended | For YouTube/Twitch/MSE sites (`sudo pacman -S yt-dlp` or `pipx install yt-dlp`). Also required when VLC opens YouTube-like page URLs |
+| **VLC** *(Optional)* | Optional | Pick **VLC** instead of mpv in the extension popup (`sudo pacman -S vlc`, `sudo apt install vlc`) |
 
 ### 3. Android (Phone / Tablet — Android 8.0+)
 
 | Component | Status | Notes |
 | :--- | :--- | :--- |
-| **mpv-android** | Required | Package ID: `is.xyz.mpv` (Install from Google Play Store, F-Droid, or GitHub Releases) |
+| **mpv-android** and/or **VLC** | Required (one of them) | `is.xyz.mpv` or `org.videolan.vlc`. **VLC is recommended for sites that serve HLS without a `.m3u8` extension** (see Known Limitations) |
 | **Extension-Capable Browser** | Required *(for on-video button)* | **Bare Browser**, **Lemur Browser**, **Mises Browser** (Chromium MV3), or **Firefox for Android** |
 
 > **Important Note on Chrome for Android:** Standard Google **Chrome for Android** does not support desktop extensions (`content_scripts` / `webRequest`). Use an extension-capable browser listed above for the one-tap on-video **`▶ mpv`** button. *(An optional Kotlin Share-Intent companion app is also included under `android/` for sharing direct `.m3u8`/`.mp4` URLs from standard browsers).*
@@ -103,8 +107,8 @@ Running `make` automatically:
 1. Install **[mpv-android](https://play.google.com/store/apps/details?id=is.xyz.mpv)** (`is.xyz.mpv`) on your phone.
 2. Install an extension-capable Android browser (Recommended: **Bare Browser**, **Lemur Browser**, or **Mises Browser**).
 3. Send the pre-built **`dist/stream-to-mpv-extension.zip`** archive to your phone *(or rebuild it anytime with `make zip`)*.
-4. Open **`chrome://extensions`** in your mobile browser, turn on **Developer mode**, and load `stream-to-mpv-extension.zip`.
-5. **Required Setting for Bare Browser:** Bare Browser blocks external app handoffs by default (`Open links in apps = Never`). Go to **Bare Browser → Settings → Open links in apps** and select **`Always`** (or **`Ask`**) for one-tap launching into `mpv-android`. *(If you are in Incognito mode or prefer keeping that setting off, tap **`Share Stream to App…`** inside the `mpv` menu and pick **Open with mpv** from the Android share sheet).*
+4. Open **`chrome://extensions`** in your mobile browser, turn on **Developer mode**, and load `stream-to-mpv-extension.zip`. In **Bare Browser** use **More → Load unpacked** and pick the unzipped folder (Android does not allow picking the `Download` folder itself, so put it in its own folder). When updating, **Remove** the extension and load it again: Bare's reload button does not refresh the page scripts.
+5. **Required Setting for Bare Browser:** Bare Browser blocks external app handoffs by default (`Open links in apps = Never`). Go to **Bare Browser → Settings → Privacy & security → Open links in apps** and select **`Always`** (or **`Ask every time`**) for one-tap launching into `mpv-android`. *(If you are in Incognito mode or prefer keeping that setting off, tap **`Share Stream to App…`** inside the `mpv` menu and pick **Open with mpv** from the Android share sheet).*
 6. **Optional Tip for VK & OK.ru on Android:** **YouTube, Mail.ru, Sibnet, Dailymotion, and Tau** streams play out-of-the-box in `mpv-android`. For **VK** and **OK.ru** embeds (whose `vkuser.net` CDN verifies a Chrome `User-Agent` signature via `srcAg`), open **`mpv-android → Settings → Advanced → Edit mpv.conf`** once and add:
    ```ini
    user-agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
@@ -116,6 +120,7 @@ Running `make` automatically:
 
 - **Selecting Resolution:** Click **`▶ mpv`** on the bottom-right control bar -> pick **`1080p`**, **`720p`**, **`Auto (Best Quality)`**, or **`Audio Only`**. The browser video pauses automatically while `mpv` opens.
 - **Anime & Embed Sites:** Many embed players show a static poster/ad overlay before requesting the real `.m3u8` / `.mp4` manifest. Press Play once on the video so the stream loads, then click **`▶ mpv`**.
+- **Choosing mpv or VLC:** Open the toolbar popup and pick **Player** (desktop) or **Android player**. On desktop Firefox, press **Allow desktop player** once to grant the native-messaging permission.
 - **Toolbar Popup:** Click the extension icon in the browser toolbar to check connection status (`mpv Ready` / `Android Ready`) or toggle `Auto-open videos` (off by default).
 
 ---
@@ -123,8 +128,12 @@ Running `make` automatically:
 ## Known Limitations & Security
 
 1. **DRM-Protected Streams (Netflix, Disney+, Spotify, etc.):** Widevine / FairPlay encrypted streams cannot be played in external players; the extension detects them and displays an `Unsupported stream (DRM)` notice.
-2. **Android Intent HTTP Header Limitation:** Official `mpv-android` (`is.xyz.mpv`) does not yet parse custom `Referer` or `User-Agent` headers from Android `ACTION_VIEW` Intents (`TODO` in upstream `MPVActivity.kt`). **YouTube, Mail.ru, Sibnet, Dailymotion, Tau, and GDrive** play directly on Android out-of-the-box, and **VK / OK.ru** work once a browser `user-agent` is set in `mpv.conf` (see Step 6 above). Strict `Referer`-locked embed CDNs (e.g., Alucard / Vidmoly) may still return `403` on Android (all of them work seamlessly on macOS where full headers are passed).
-3. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and a `--` argument separator, rejects CRLF header injection, and validates caller `allowed_origins`.
+2. **Android Intent HTTP Header Limitation:** Official `mpv-android` (`is.xyz.mpv`) does not yet parse custom `Referer` or `User-Agent` headers from Android `ACTION_VIEW` Intents (`TODO` in upstream `MPVActivity.kt`). **YouTube, Mail.ru, Sibnet, Dailymotion, Tau, and Google Drive** play directly on Android out-of-the-box, and **VK / OK.ru** work once a browser `user-agent` is set in `mpv.conf` (see Step 6 above). Strict `Referer`-locked embed CDNs (e.g., Alucard / Vidmoly) may still return `403` on Android (all of them work seamlessly on macOS where full headers are passed).
+3. **mpv-android and extensionless HLS:** FFmpeg 7.1+ (used by current mpv-android builds) refuses to detect HLS when the URL has no `.m3u8` extension *and* the server sends a generic MIME type (`Not detecting m3u8/hls with non standard extension and non standard mime type`). On desktop the native host fixes this with `--demuxer-lavf-format=hls`, but Android intents cannot pass mpv options — so for such streams the menu shows **Open in VLC (recommended)**; VLC detects HLS by content. **Just Player** (ExoPlayer) has the same limitation: the browser can only hand it `type=video/*`, so it treats the playlist as a plain file (`UnrecognizedInputFormatException`); the menu recommends VLC whenever the selected Android player is not VLC, and **Open with…** uses the HLS MIME type for such streams so Android only lists apps that can actually play them. **MX Player** (tested with 3.4.3) detects HLS by content and plays these streams, so no VLC hint is shown when MX is selected. On first launch MX asks for file access before it plays anything, network streams included.
+4. **Google Drive embeds:** Drive's own `videoplayback` URLs are tied to a session cookie (`403` in an external player) and are split audio/video MSE tracks. For a public Drive file the extension opens the file's cookieless original instead (`drive.usercontent.google.com/download?id=…&confirm=t`, full original quality, seekable). Tested: desktop Firefox → native host → mpv from the button inside the Drive player; on Firefox Android the extension resolved the same URL (popup → Share → Just Player), and VLC, Just Player and mpv-android each played that URL. Private files, or files that hit Drive's download quota, return an HTML page at that URL instead of video.
+5. **Encrypted subtitles:** Some sites (e.g. openani.me) serve subtitles in an encrypted container behind a signed per-session token and decode them in the page. The extension does not break that protection, so the video opens in the player without those subtitles.
+6. **Service-worker / encrypted MSE players** (e.g. Abyss) never expose a playable URL to the page and are not supported; pick another source on the site.
+7. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` launches only allow-listed players (`mpv`, `vlc`), accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and a `--` argument separator, rejects CRLF header injection, and validates caller `allowed_origins`.
 
 ---
 
@@ -170,10 +179,11 @@ make store
 │   ├── content.js                  # Inline control-bar button, resolution menu & Android YT HLS extractor
 │   ├── background.js               # webRequest capture, frame matching & Native Messaging / Intent bridge
 │   ├── stream_utils.js             # HLS Master (#EXT-X-STREAM-INF) parser & stream prioritization
+│   ├── page_probe.js               # MAIN-world reader for JWPlayer / Video.js / ArtPlayer sources (on click only)
 │   ├── popup.html                  # Compact status & settings popup
 │   └── popup.js                    # Popup controller
 ├── native/                         # macOS & Linux Native Messaging Host
-│   ├── mpv_host.py                 # Hardened Python 3 mpv & yt-dlp launcher (com.talha.mpv)
+│   ├── mpv_host.py                 # Hardened Python 3 mpv / VLC & yt-dlp launcher (com.talha.mpv)
 │   ├── install.sh                  # Zero-config multi-browser manifest installer
 │   ├── build_macos_pkg.sh          # macOS .pkg builder
 │   └── com.talha.mpv.json.example  # Example Native Messaging host manifest

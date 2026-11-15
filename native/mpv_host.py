@@ -28,6 +28,12 @@ CHROME_EXT_ORIGIN_REGEX = re.compile(r"^chrome-extension://[a-p]{32}/?$")
 # Firefox (Gecko) eklenti kimliği
 GECKO_EXT_ID = "stream-to-mpv@talha.dev"
 
+# Host sürümü (eklenti eski bir ~/mpv_host kopyasını ping ile tespit edebilsin diye)
+HOST_VERSION = "1.2.0"
+
+# İzin verilen harici oynatıcılar (yol asla mesajdan alınmaz)
+SUPPORTED_PLAYERS = ("mpv", "vlc")
+
 
 def log_stderr(message: str) -> None:
     """
@@ -262,60 +268,23 @@ def looks_like_direct_stream(url: str) -> bool:
     )
 
 
-def resolve_with_ytdlp(url: str, referer: str, user_agent: str) -> tuple[bool, str]:
+def find_player_binary(player: str) -> str | None:
     """
-    İsteğe bağlı fallback modunda yt-dlp --get-url kullanarak oynatılabilir medya URL'sini çözümler.
-    Kesinlikle dosya indirme işlemi başlatmaz.
+    İzin verilen oynatıcının (mpv / vlc) çalıştırılabilir dosyasını bulur.
+    Yol asla mesajdan alınmaz; yalnızca sabit isimler ve bilinen uygulama paketleri denenir.
     """
-    ytdlp_bin = find_binary("yt-dlp")
-    if not ytdlp_bin:
-        return False, "yt-dlp binary not found on system PATH."
-
-    cmd = [
-        ytdlp_bin,
-        "--no-playlist",
-        "--no-warnings",
-        "--get-url",
-        "-f",
-        "best[protocol^=http]/best",
-    ]
-    if referer:
-        cmd.extend(["--referer", referer])
-    if user_agent:
-        cmd.extend(["--user-agent", user_agent])
-
-    cmd.extend(["--", url])
-
-    env = os.environ.copy()
-    env["PATH"] = build_augmented_path()
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=12,
-            shell=False,
-            env=env,
-        )
-        if proc.returncode != 0:
-            return False, "yt-dlp could not resolve a playable stream URL."
-
-        lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-        if not lines:
-            return False, "yt-dlp returned empty output."
-
-        resolved_url = lines[0]
-        ok_url, validated = validate_http_url(resolved_url)
-        if not ok_url:
-            return False, "yt-dlp returned a non-HTTP URL."
-
-        return True, validated
-    except subprocess.TimeoutExpired:
-        return False, "yt-dlp resolution timed out."
-    except Exception as exc:
-        log_stderr(f"yt-dlp error: {type(exc).__name__}")
-        return False, "Failed to execute yt-dlp fallback."
+    if player == "mpv":
+        return find_binary("mpv")
+    if player == "vlc":
+        found = find_binary("vlc")
+        if found:
+            return found
+        mac_vlc = Path("/Applications/VLC.app/Contents/MacOS/VLC")
+        home_mac_vlc = Path.home() / "Applications/VLC.app/Contents/MacOS/VLC"
+        for candidate in (mac_vlc, home_mac_vlc):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
 
 
 def build_ytdl_format_selector(preferred_resolution: str) -> str:
@@ -340,18 +309,155 @@ def build_ytdl_format_selector(preferred_resolution: str) -> str:
     return "bestvideo[protocol*=m3u8]+bestaudio[protocol*=m3u8]/best[protocol*=m3u8]/bestvideo+bestaudio/best"
 
 
+def resolve_with_ytdlp(
+    url: str, referer: str, user_agent: str, preferred_resolution: str = "best"
+) -> tuple[bool, dict | str]:
+    """
+    yt-dlp --dump-json ile sayfa URL'sinden oynatılabilir medya URL'lerini (ve gerekli başlıkları) çözümler.
+    Ayrık video+ses formatlarında ses izini ayrıca döndürür. Kesinlikle dosya indirme işlemi başlatmaz.
+    Dönen sözlük: {"url", "audio_url", "user_agent", "referer"}
+    """
+    ytdlp_bin = find_binary("yt-dlp")
+    if not ytdlp_bin:
+        return False, "yt-dlp is not installed (required to resolve this page for the selected player)."
+
+    cmd = [
+        ytdlp_bin,
+        "--no-playlist",
+        "--no-warnings",
+        "--dump-json",
+        "-f",
+        build_ytdl_format_selector(preferred_resolution),
+    ]
+    if referer:
+        cmd.extend(["--referer", referer])
+    if user_agent:
+        cmd.extend(["--user-agent", user_agent])
+
+    cmd.extend(["--", url])
+
+    env = os.environ.copy()
+    env["PATH"] = build_augmented_path()
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=25,
+            shell=False,
+            env=env,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return False, "yt-dlp could not resolve a playable stream URL."
+
+        info = json.loads(proc.stdout.strip().splitlines()[0])
+        if not isinstance(info, dict):
+            return False, "yt-dlp returned unexpected output."
+
+        video_url = ""
+        audio_url = ""
+        headers = info.get("http_headers") if isinstance(info.get("http_headers"), dict) else {}
+
+        requested = info.get("requested_formats")
+        if isinstance(requested, list) and requested:
+            for fmt in requested:
+                if not isinstance(fmt, dict):
+                    continue
+                f_url = fmt.get("url") or ""
+                has_video = fmt.get("vcodec") not in (None, "none")
+                if has_video and not video_url:
+                    video_url = f_url
+                    if isinstance(fmt.get("http_headers"), dict):
+                        headers = fmt["http_headers"]
+                elif not has_video and not audio_url:
+                    audio_url = f_url
+            if not video_url and audio_url:
+                video_url, audio_url = audio_url, ""
+        else:
+            video_url = info.get("url") or ""
+
+        ok_url, validated = validate_http_url(video_url)
+        if not ok_url:
+            return False, "yt-dlp returned a non-HTTP URL."
+
+        result = {"url": validated, "audio_url": "", "user_agent": "", "referer": ""}
+        if audio_url:
+            ok_audio, validated_audio = validate_http_url(audio_url)
+            if ok_audio:
+                result["audio_url"] = validated_audio
+
+        ok_ua, ua_val = validate_header_field(str(headers.get("User-Agent", "") or ""), "User-Agent")
+        if ok_ua:
+            result["user_agent"] = ua_val
+        ok_ref, ref_val = validate_header_field(str(headers.get("Referer", "") or ""), "Referer")
+        if ok_ref:
+            result["referer"] = ref_val
+        return True, result
+    except subprocess.TimeoutExpired:
+        return False, "yt-dlp resolution timed out."
+    except Exception as exc:
+        log_stderr(f"yt-dlp error: {type(exc).__name__}")
+        return False, "Failed to execute yt-dlp."
+
+
+def spawn_detached(cmd: list[str], player: str) -> tuple[bool, dict]:
+    """
+    Oynatıcıyı ayrı oturumda (start_new_session=True) ve argüman listesiyle (shell=False) başlatır.
+    """
+    env = os.environ.copy()
+    env["PATH"] = build_augmented_path()
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            shell=False,
+            env=env,
+        )
+        return True, {
+            "ok": True,
+            "status": f"{player}_launch_requested",
+            "message": f"{player} launch requested",
+            "player": player,
+            "pid": proc.pid,
+        }
+    except Exception as exc:
+        log_stderr(f"Failed to spawn {player}: {type(exc).__name__}")
+        return False, {
+            "ok": False,
+            "error_code": "PLAYER_SPAWN_ERROR" if player != "mpv" else "MPV_SPAWN_ERROR",
+            "error": f"Failed to start {player} process: {type(exc).__name__}",
+        }
+
+
+def origin_from_referer(referer: str) -> str:
+    try:
+        parsed_ref = urlparse(referer)
+        if parsed_ref.scheme in ("http", "https") and parsed_ref.netloc:
+            return f"{parsed_ref.scheme}://{parsed_ref.netloc}"
+    except Exception:
+        pass
+    return ""
+
+
 def launch_mpv(
     url: str,
     referer: str,
     user_agent: str,
     via_ytdl_hook: bool = False,
     preferred_resolution: str = "best",
+    title: str = "",
+    force_hls: bool = False,
 ) -> tuple[bool, dict]:
     """
     mpv oynatıcısını subprocess.Popen ile ayrı oturumda (start_new_session=True) ve
     argüman listesi (shell=False) kullanarak güvenli biçimde başlatır.
     """
-    mpv_bin = find_binary("mpv")
+    mpv_bin = find_player_binary("mpv")
     if not mpv_bin:
         return False, {
             "ok": False,
@@ -373,6 +479,15 @@ def launch_mpv(
     if preferred_resolution == "audio":
         cmd.append("--vid=no")
 
+    if title:
+        cmd.append(f"--force-media-title={title}")
+
+    if force_hls and not via_ytdl_hook:
+        # FFmpeg 7.1+ uzantısı .m3u8 olmayan ve MIME türü application/octet-stream olan playlist'leri HLS olarak
+        # algılamayı reddeder ("Not detecting m3u8/hls with non standard extension..."). Eklenti playlist'i
+        # sayfa içinde #EXTM3U ile doğruladıysa demuxer'ı zorla.
+        cmd.append("--demuxer-lavf-format=hls")
+
     if via_ytdl_hook:
         # YouTube SABR 403 kısıtına karşı HLS (m3u8) akışlarına öncelik ver ve
         # kullanıcının seçtiği çözünürlük sınırını uygula.
@@ -382,46 +497,56 @@ def launch_mpv(
         if referer:
             cmd.append(f"--referrer={referer}")
             # Bazı CDN'ler Origin başlığını da bekleyebildiği için http-header-fields ile desteklenir
-            try:
-                parsed_ref = urlparse(referer)
-                if parsed_ref.scheme in ("http", "https") and parsed_ref.netloc:
-                    origin_val = f"{parsed_ref.scheme}://{parsed_ref.netloc}"
-                    cmd.append(f"--http-header-fields=Origin: {origin_val}")
-            except Exception:
-                pass
+            origin_val = origin_from_referer(referer)
+            if origin_val:
+                cmd.append(f"--http-header-fields=Origin: {origin_val}")
 
         if user_agent:
             cmd.append(f"--user-agent={user_agent}")
 
     # URL'nin bayrak (flag) olarak yorumlanmasını önlemek için '--' ayırıcı kullan
     cmd.extend(["--", url])
+    return spawn_detached(cmd, "mpv")
 
-    env = os.environ.copy()
-    env["PATH"] = build_augmented_path()
 
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            shell=False,
-            env=env,
-        )
-        return True, {
-            "ok": True,
-            "status": "mpv_launch_requested",
-            "message": "mpv launch requested",
-            "pid": proc.pid,
-        }
-    except Exception as exc:
-        log_stderr(f"Failed to spawn mpv: {type(exc).__name__}")
+def launch_vlc(
+    url: str,
+    referer: str,
+    user_agent: str,
+    preferred_resolution: str = "best",
+    audio_url: str = "",
+    title: str = "",
+) -> tuple[bool, dict]:
+    """
+    VLC oynatıcısını Referer / User-Agent başlıklarıyla güvenli biçimde başlatır.
+    """
+    vlc_bin = find_player_binary("vlc")
+    if not vlc_bin:
         return False, {
             "ok": False,
-            "error_code": "MPV_SPAWN_ERROR",
-            "error": f"Failed to start mpv process: {type(exc).__name__}",
+            "error_code": "VLC_NOT_INSTALLED",
+            "error": "VLC is not installed or could not be found (checked PATH and /Applications/VLC.app).",
         }
+
+    # İlk çalıştırmadaki "Privacy and Network Access Policy" sorusu modal bir penceredir; video penceresinin
+    # arkasında kalınca (KDE/Wayland'de gözlendi) VLC tıklamaya yanıt vermez. Soru sorulmadan açılır.
+    cmd = [vlc_bin, "--no-qt-privacy-ask"]
+    if referer:
+        cmd.append(f"--http-referrer={referer}")
+    if user_agent:
+        cmd.append(f"--http-user-agent={user_agent}")
+    if preferred_resolution == "audio":
+        cmd.append("--no-video")
+    elif preferred_resolution.isdigit() and 144 <= int(preferred_resolution) <= 4320:
+        cmd.append(f"--adaptive-maxheight={int(preferred_resolution)}")
+    if audio_url:
+        cmd.append(f"--input-slave={audio_url}")
+    if title:
+        cmd.append(f"--meta-title={title}")
+
+    # URL yalnızca http(s) olarak doğrulandığı için bayrak olarak yorumlanamaz
+    cmd.append(url)
+    return spawn_detached(cmd, "vlc")
 
 
 def handle_message(msg: dict) -> dict:
@@ -430,11 +555,13 @@ def handle_message(msg: dict) -> dict:
     """
     action = msg.get("action")
     if action == "ping":
-        mpv_bin = find_binary("mpv")
         return {
             "ok": True,
             "status": "pong",
-            "mpv_available": bool(mpv_bin),
+            "host_version": HOST_VERSION,
+            "mpv_available": bool(find_player_binary("mpv")),
+            "players": {name: bool(find_player_binary(name)) for name in SUPPORTED_PLAYERS},
+            "ytdlp_available": bool(find_binary("yt-dlp")),
         }
 
     if action != "open":
@@ -442,6 +569,14 @@ def handle_message(msg: dict) -> dict:
             "ok": False,
             "error_code": "INVALID_ACTION",
             "error": "Unsupported action. Expected 'open' or 'ping'.",
+        }
+
+    player = str(msg.get("player", "mpv") or "mpv").strip().lower()
+    if player not in SUPPORTED_PLAYERS:
+        return {
+            "ok": False,
+            "error_code": "INVALID_PLAYER",
+            "error": f"Unsupported player. Expected one of: {', '.join(SUPPORTED_PLAYERS)}.",
         }
 
     raw_url = msg.get("url", "")
@@ -469,26 +604,64 @@ def handle_message(msg: dict) -> dict:
             "error": user_agent,
         }
 
-    use_ytdlp = bool(msg.get("use_ytdlp_fallback", False))
-    resolved_via = "direct"
-
-    # Doğrudan HLS ve MP4 akışlarında her zaman doğrudan mpv tercih edilir.
-    # Doğrudan akış olmayan sayfa URL'lerinde (örn. YouTube, Twitch, Vimeo):
-    # - Eğer mpv zaten yt-dlp entegrasyonuyla (ytdl_hook) çalışabiliyorsa,
-    #   onay gecikmesi yaşatmamak ve ses+video birleştirmesini mpv'nin yapması için doğrudan mpv'ye ilet.
-    # - Aksi halde yt-dlp --get-url ile çözümle.
-    if use_ytdlp and not looks_like_direct_stream(target_url):
-        if find_binary("yt-dlp"):
-            resolved_via = "mpv-ytdl"
-        else:
-            ok_yt, resolved_or_err = resolve_with_ytdlp(target_url, referer, user_agent)
-            if ok_yt:
-                target_url = resolved_or_err
-                resolved_via = "yt-dlp"
+    ok_title, title = validate_header_field(msg.get("title", ""), "Title")
+    if not ok_title:
+        title = ""
+    title = title[:200]
 
     preferred_res = str(msg.get("preferred_resolution", "best") or "best").strip().lower()
     if CONTROL_CHAR_REGEX.search(preferred_res) or len(preferred_res) > 16:
         preferred_res = "best"
+
+    # kind: "stream" -> yakalanmış gerçek medya akışı (uzantısız /w/<token> gibi HLS'ler dahil), başlıklarla doğrudan aç.
+    #       "page"   -> akış yakalanamadı; sayfa URL'si yt-dlp ile çözülmeli (YouTube, Twitch vb.).
+    # Eski eklenti sürümleri "kind" göndermez: o durumda use_ytdlp_fallback + uzantı sezgisi kullanılır.
+    kind = str(msg.get("kind", "") or "").strip().lower()
+    use_ytdlp = bool(msg.get("use_ytdlp_fallback", False))
+    stream_format = str(msg.get("stream_format", "") or "").strip().lower()
+    path_lower = urlparse(target_url).path.lower()
+    force_hls = stream_format == "hls" and not (path_lower.endswith(".m3u8") or path_lower.endswith(".m3u"))
+    if kind not in ("stream", "page"):
+        kind = "page" if (use_ytdlp and not looks_like_direct_stream(target_url)) else "stream"
+
+    if player == "vlc":
+        audio_url = ""
+        resolved_via = "direct"
+        if kind == "page":
+            ok_yt, resolved = resolve_with_ytdlp(target_url, referer, user_agent, preferred_res)
+            if not ok_yt:
+                return {
+                    "ok": False,
+                    "error_code": "YTDLP_RESOLVE_FAILED",
+                    "error": str(resolved),
+                }
+            target_url = resolved["url"]
+            audio_url = resolved["audio_url"]
+            referer = resolved["referer"] or referer
+            user_agent = resolved["user_agent"] or user_agent
+            resolved_via = "yt-dlp"
+        ok_launch, result = launch_vlc(
+            target_url,
+            referer,
+            user_agent,
+            preferred_resolution=preferred_res,
+            audio_url=audio_url,
+            title=title,
+        )
+        if ok_launch:
+            result["resolved_via"] = resolved_via
+        return result
+
+    # mpv: sayfa URL'lerinde mpv'nin yerleşik ytdl_hook'u (yt-dlp) ses+video birleştirmesini kendisi yapar.
+    resolved_via = "direct"
+    if kind == "page":
+        if not find_binary("yt-dlp"):
+            return {
+                "ok": False,
+                "error_code": "YTDLP_NOT_INSTALLED",
+                "error": "No stream was captured and yt-dlp is not installed, so this page cannot be resolved. Install yt-dlp or play the video first.",
+            }
+        resolved_via = "mpv-ytdl"
 
     ok_launch, result = launch_mpv(
         target_url,
@@ -496,6 +669,8 @@ def handle_message(msg: dict) -> dict:
         user_agent,
         via_ytdl_hook=(resolved_via == "mpv-ytdl"),
         preferred_resolution=preferred_res,
+        title=title,
+        force_hls=force_hls and kind == "stream",
     )
     if ok_launch:
         result["resolved_via"] = resolved_via

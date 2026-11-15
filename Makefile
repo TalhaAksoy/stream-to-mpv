@@ -57,6 +57,8 @@ test:
 	@python3 ./tests/test_native_host.py
 	@python3 ./tests/test_anime_embed_e2e.py
 	@python3 ./tests/test_overlay_positioning.py
+	@node ./tests/test_disguised_hls_e2e.mjs
+	@node ./tests/test_firefox_desktop_e2e.mjs
 
 pkg:
 	@chmod +x ./native/build_macos_pkg.sh
