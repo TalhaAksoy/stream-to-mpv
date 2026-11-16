@@ -78,10 +78,12 @@ make
 
 Running `make` automatically:
 1. Installs `mpv` and `yt-dlp` via Homebrew if not already installed.
-2. Installs the native host script to `~/mpv_host/mpv_host.py`.
-3. Registers Native Messaging manifests across Chrome, Chromium, Brave, Edge, Vivaldi, Arc, Opera, and Firefox (without asking for an Extension ID) and verifies the handshake.
+2. Installs the native host script to `~/Library/Application Support/StreamToMpv/mpv_host.py` (no folder is created at the top of your home folder).
+3. Registers Native Messaging manifests for the installed browsers among Chrome, Chromium, Brave, Edge, Vivaldi, Arc, Opera, and Firefox (without asking for an Extension ID) and verifies the handshake. Installed a new browser later? Run `make` again.
 
-> **Updating:** Store updates only update the extension. Fixes in the native host (for example the VLC + YouTube fixes) arrive when you pull the latest code and run `make` again (`make host` reinstalls only the host).
+> **Updating:** Store updates only update the extension. Fixes in the native host (for example the VLC + YouTube fixes) arrive when you pull the latest code and run `make` again (`make host` reinstalls only the host). Versions up to 1.2.1 installed the host to `~/mpv_host`; running `make` again moves it and removes that folder.
+>
+> **Uninstalling:** `make uninstall` removes the native host and every browser registration it created. mpv, VLC and yt-dlp are left installed.
 
 #### Step 2: Load the Browser Extension
 
@@ -97,7 +99,7 @@ Running `make` automatically:
 ### B. Linux Setup
 
 1. Install `mpv` (and optionally `yt-dlp`) with your package manager — `make` does **not** run `sudo` for you; it only warns if they are missing.
-2. Run `make` inside the cloned repository. It installs the host to `~/mpv_host/mpv_host.py` and registers Native Messaging manifests under `~/.config/<browser>/NativeMessagingHosts` (respecting `$XDG_CONFIG_HOME`), `~/.mozilla/native-messaging-hosts`, and `~/.librewolf/native-messaging-hosts`.
+2. Run `make` inside the cloned repository. It installs the host to `~/.local/share/stream-to-mpv/mpv_host.py` (respecting `$XDG_DATA_HOME`) and registers Native Messaging manifests for the browsers you have under `~/.config/<browser>/NativeMessagingHosts` (respecting `$XDG_CONFIG_HOME`), `~/.mozilla/native-messaging-hosts`, and `~/.librewolf/native-messaging-hosts`. `make uninstall` removes all of it.
 3. Load the **`extension`** folder via **Load unpacked** in `chrome://extensions` (same as Step 2 above).
 
 > **Note:** Flatpak/Snap browsers are sandboxed and cannot launch host programs from your home directory; use a natively packaged browser.
@@ -158,6 +160,9 @@ Built with pure vanilla JavaScript (Manifest V3) and Python 3 — zero npm frame
 ```bash
 # Install dependencies, native host, browser manifests, and mobile zip
 make
+
+# Remove the native host and its browser registrations
+make uninstall
 
 # Run all unit, service-worker concurrency, security, and real mpv/ffmpeg E2E tests
 make test

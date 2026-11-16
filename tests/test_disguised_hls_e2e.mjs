@@ -84,12 +84,19 @@ const udd = path.join(tmp, "profile");
 const nmDir = path.join(udd, "NativeMessagingHosts");
 fs.mkdirSync(nmDir, { recursive: true });
 const hostManifest = path.join(nmDir, "com.talha.mpv.json");
+// Host, macOS'taki "~/Library/Application Support/StreamToMpv" gibi boşluklu bir yola kopyalanır:
+// Chromium'un böyle bir yoldaki host'u çalıştırabildiği de doğrulanır
+const spacedHostDir = path.join(tmp, "Application Support", "StreamToMpv");
+fs.mkdirSync(spacedHostDir, { recursive: true });
+const spacedHost = path.join(spacedHostDir, "mpv_host.py");
+fs.copyFileSync(path.join(ROOT, "native/mpv_host.py"), spacedHost);
+fs.chmodSync(spacedHost, 0o755);
 fs.writeFileSync(
   hostManifest,
   JSON.stringify({
     name: "com.talha.mpv",
     description: "test",
-    path: path.join(ROOT, "native/mpv_host.py"),
+    path: spacedHost,
     type: "stdio",
     allowed_origins: [`chrome-extension://${EXT_ID}/`]
   })

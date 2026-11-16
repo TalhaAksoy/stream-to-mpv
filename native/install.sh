@@ -11,9 +11,25 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 EXT_DIR="${PROJECT_ROOT}/extension"
-HOST_DIR="${HOME}/mpv_host"
-HOST_SCRIPT="${HOST_DIR}/mpv_host.py"
 HOST_NAME="com.talha.mpv"
+OS_NAME="$(uname -s)"
+
+# Host betiği ev klasörüne değil, işletim sisteminin uygulama verisi için ayırdığı konuma kurulur
+if [[ "${OS_NAME}" == "Darwin" ]]; then
+  HOST_DIR="${HOME}/Library/Application Support/StreamToMpv"
+else
+  HOST_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/stream-to-mpv"
+fi
+HOST_SCRIPT="${HOST_DIR}/mpv_host.py"
+# 1.2.1 ve öncesinin kurduğu konum: kurulumda ve kaldırmada temizlenir
+LEGACY_HOST_DIR="${HOME}/mpv_host"
+
+# Kullanım: install.sh [EXTENSION_ID] | --uninstall | --print-host-path
+MODE="install"
+case "${1:-}" in
+  --uninstall) MODE="uninstall"; shift ;;
+  --print-host-path) echo "${HOST_SCRIPT}"; exit 0 ;;
+esac
 
 # 1. Sabit (manifest.json "key" alanından gelen) Extension ID
 KEY_EXT_ID="haamijddaadhbhjfpblfloidmpglfmnk"
@@ -46,8 +62,6 @@ if [[ -n "${CUSTOM_EXT_ID}" && "${CUSTOM_EXT_ID}" =~ ^[a-p]{32}$ && "${CUSTOM_EX
     \"chrome-extension://${CUSTOM_EXT_ID}/\""
 fi
 
-mkdir -p "${HOST_DIR}"
-
 MANIFEST_CONTENT=$(cat <<EOF
 {
   "name": "${HOST_NAME}",
@@ -73,8 +87,6 @@ FIREFOX_MANIFEST_CONTENT=$(cat <<EOF
 }
 EOF
 )
-
-OS_NAME="$(uname -s)"
 
 # İşletim sistemine göre tarayıcıların NativeMessagingHosts dizinleri
 if [[ "${OS_NAME}" == "Darwin" ]]; then
@@ -113,23 +125,71 @@ else
   exit 1
 fi
 
+# Eski ~/mpv_host kurulumunu siler: yalnızca bizim dosyalarımız, klasör ancak boş kalırsa
+remove_legacy_host() {
+  [[ -d "${LEGACY_HOST_DIR}" && "${LEGACY_HOST_DIR}" != "${HOST_DIR}" ]] || return 0
+  rm -f "${LEGACY_HOST_DIR}/mpv_host.py" "${LEGACY_HOST_DIR}/${HOST_NAME}.json"
+  if rmdir "${LEGACY_HOST_DIR}" 2>/dev/null; then
+    echo "  -> Removed old install folder: ${LEGACY_HOST_DIR}"
+  else
+    echo "  -> Removed old host files; ${LEGACY_HOST_DIR} kept because it contains other files"
+  fi
+}
+
+if [[ "${MODE}" == "uninstall" ]]; then
+  echo "[1/2] Removing browser NativeMessagingHosts manifests..."
+  for TARGET_DIR in "${CHROMIUM_NM_DIRS[@]}" "${FIREFOX_NM_DIRS[@]}"; do
+    if [[ -f "${TARGET_DIR}/${HOST_NAME}.json" ]]; then
+      rm -f "${TARGET_DIR}/${HOST_NAME}.json"
+      echo "  -> Removed: ${TARGET_DIR}/${HOST_NAME}.json"
+    fi
+    # Kurulumun açtığı klasör başka kayıt içermiyorsa kaldırılır (rmdir yalnızca boş klasörü siler)
+    rmdir "${TARGET_DIR}" 2>/dev/null || true
+  done
+  echo "[2/2] Removing native host script..."
+  rm -f "${HOST_SCRIPT}"
+  rmdir "${HOST_DIR}" 2>/dev/null && echo "  -> Removed: ${HOST_DIR}" || true
+  remove_legacy_host
+  echo ""
+  echo "✓ Stream to mpv native host uninstalled. mpv, VLC and yt-dlp were left untouched."
+  if [[ "${OS_NAME}" == "Darwin" && -d "/Library/Application Support/StreamToMpv" ]]; then
+    echo "  The .pkg installer also left a system-wide copy in /Library/Application Support/StreamToMpv"
+    echo "  (owned by root); delete that folder in Finder if you no longer need it."
+  fi
+  exit 0
+fi
+
 echo "[1/3] Installing native host script to ${HOST_SCRIPT}..."
+mkdir -p "${HOST_DIR}"
 cp "${SCRIPT_DIR}/mpv_host.py" "${HOST_SCRIPT}"
 chmod 755 "${HOST_SCRIPT}"
-echo "${MANIFEST_CONTENT}" > "${HOST_DIR}/${HOST_NAME}.json"
+remove_legacy_host
 
 echo "[2/3] Configuring browser NativeMessagingHosts manifests..."
+# Yalnızca kurulu (ayar klasörü olan) tarayıcılara kayıt yazılır; olmayan tarayıcılar için boş klasör açılmaz
+CONFIGURED_COUNT=0
+register_manifest() {
+  local target_dir="$1" content="$2"
+  [[ -d "$(dirname "${target_dir}")" ]] || return 0
+  mkdir -p "${target_dir}"
+  echo "${content}" > "${target_dir}/${HOST_NAME}.json"
+  echo "  -> Configured: ${target_dir}/${HOST_NAME}.json"
+  CONFIGURED_COUNT=$((CONFIGURED_COUNT + 1))
+}
+
 for TARGET_DIR in "${CHROMIUM_NM_DIRS[@]}"; do
-  mkdir -p "${TARGET_DIR}"
-  echo "${MANIFEST_CONTENT}" > "${TARGET_DIR}/${HOST_NAME}.json"
-  echo "  -> Configured: ${TARGET_DIR}/${HOST_NAME}.json"
+  register_manifest "${TARGET_DIR}" "${MANIFEST_CONTENT}"
 done
 
 for TARGET_DIR in "${FIREFOX_NM_DIRS[@]}"; do
-  mkdir -p "${TARGET_DIR}"
-  echo "${FIREFOX_MANIFEST_CONTENT}" > "${TARGET_DIR}/${HOST_NAME}.json"
-  echo "  -> Configured: ${TARGET_DIR}/${HOST_NAME}.json"
+  register_manifest "${TARGET_DIR}" "${FIREFOX_MANIFEST_CONTENT}"
 done
+
+if [[ "${CONFIGURED_COUNT}" -eq 0 ]]; then
+  echo "  -> WARNING: no supported browser profile found. Open your browser once, then run 'make' again."
+else
+  echo "  -> Installed a new browser later? Run 'make' again to register it."
+fi
 
 echo "[3/3] Verifying mpv & yt-dlp..."
 MPV_FOUND=""

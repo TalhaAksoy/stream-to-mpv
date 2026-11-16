@@ -2,13 +2,14 @@
 # Kullanım:
 #   make          -> Bağımlılıkları kontrol eder/kurar, Native Host'u ve tüm tarayıcı manifestlerini kurar, test eder.
 #   make install  -> Sadece kurulum ve doğrulama yapar.
+#   make uninstall -> Native Host'u ve tüm tarayıcı kayıtlarını kaldırır (mpv/VLC/yt-dlp'ye dokunmaz).
 #   make zip      -> Android (Bare / Lemur / Mises) için dist/stream-to-mpv-extension.zip üretir.
 #   make test     -> Tüm birim ve entegrasyon testlerini çalıştırır.
 #   make store    -> Chrome Web Store ve Firefox AMO için dist/store/*.zip üretir.
 #   make pkg      -> (Yalnızca macOS) Dağıtılabilir .pkg kurulum paketini üretir.
 
 SHELL := /bin/bash
-.PHONY: all install deps host verify zip store test pkg clean
+.PHONY: all install uninstall deps host verify zip store test pkg clean
 
 all: install zip
 
@@ -49,7 +50,11 @@ host:
 
 verify:
 	@echo "==> [3/3] Verifying Native Messaging Host handshake (under clean GUI PATH)..."
-	@env -i HOME="${HOME}" EXT_PATH="$(CURDIR)/extension" PATH="/usr/bin:/bin:/usr/sbin:/sbin" /usr/bin/python3 -c 'import hashlib, json, os, struct, subprocess; p = os.environ["EXT_PATH"]; path_id = "".join(chr(ord("a") + int(c, 16)) for c in hashlib.sha256(p.encode("utf-8")).hexdigest()[:32]); msg = json.dumps({"action": "ping"}).encode("utf-8"); payload = struct.pack("<I", len(msg)) + msg; r1 = subprocess.run([os.environ["HOME"] + "/mpv_host/mpv_host.py", "chrome-extension://haamijddaadhbhjfpblfloidmpglfmnk/"], input=payload, capture_output=True); r2 = subprocess.run([os.environ["HOME"] + "/mpv_host/mpv_host.py", f"chrome-extension://{path_id}/"], input=payload, capture_output=True); assert r1.returncode == 0, f"stderr: {r1.stderr.decode()}"; d1 = json.loads(r1.stdout[4:].decode("utf-8")); d2 = json.loads(r2.stdout[4:].decode("utf-8")); assert d1.get("ok") and d2.get("ok") and d1.get("mpv_available"); print("  -> Clean GUI environment test OK & mpv ready!")'
+	@env -i HOME="${HOME}" EXT_PATH="$(CURDIR)/extension" HOST_SCRIPT="$$(./native/install.sh --print-host-path)" PATH="/usr/bin:/bin:/usr/sbin:/sbin" /usr/bin/python3 -c 'import hashlib, json, os, struct, subprocess; p = os.environ["EXT_PATH"]; path_id = "".join(chr(ord("a") + int(c, 16)) for c in hashlib.sha256(p.encode("utf-8")).hexdigest()[:32]); msg = json.dumps({"action": "ping"}).encode("utf-8"); payload = struct.pack("<I", len(msg)) + msg; r1 = subprocess.run([os.environ["HOST_SCRIPT"], "chrome-extension://haamijddaadhbhjfpblfloidmpglfmnk/"], input=payload, capture_output=True); r2 = subprocess.run([os.environ["HOST_SCRIPT"], f"chrome-extension://{path_id}/"], input=payload, capture_output=True); assert r1.returncode == 0, f"stderr: {r1.stderr.decode()}"; d1 = json.loads(r1.stdout[4:].decode("utf-8")); d2 = json.loads(r2.stdout[4:].decode("utf-8")); assert d1.get("ok") and d2.get("ok") and d1.get("mpv_available"); print("  -> Clean GUI environment test OK & mpv ready!")'
+
+uninstall:
+	@chmod +x ./native/install.sh
+	@./native/install.sh --uninstall
 
 test:
 	@node ./tests/test_extension_logic.mjs

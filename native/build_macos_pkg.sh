@@ -23,7 +23,8 @@ cp "${PROJECT_ROOT}/native/mpv_host.py" "${PAYLOAD_DIR}/Library/Application Supp
 chmod 755 "${PAYLOAD_DIR}/Library/Application Support/StreamToMpv/mpv_host.py"
 cp -R "${PROJECT_ROOT}/extension" "${PAYLOAD_DIR}/Library/Application Support/StreamToMpv/extension"
 
-# 2. Paket kurulumu tamamlandığında aktif kullanıcı için ~/mpv_host ve NativeMessagingHosts kayıtlarını yapan postinstall betiği
+# 2. Paket kurulumu tamamlandığında aktif kullanıcı için ~/Library/Application Support/StreamToMpv ve
+#    NativeMessagingHosts kayıtlarını yapan postinstall betiği (install.sh ile aynı konum)
 cat << 'EOF' > "${SCRIPTS_DIR}/postinstall"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -35,8 +36,9 @@ if [[ -z "${USER_HOME}" || ! -d "${USER_HOME}" ]]; then
   exit 0
 fi
 
-HOST_DIR="${USER_HOME}/mpv_host"
+HOST_DIR="${USER_HOME}/Library/Application Support/StreamToMpv"
 HOST_SCRIPT="${HOST_DIR}/mpv_host.py"
+LEGACY_HOST_DIR="${USER_HOME}/mpv_host"
 HOST_NAME="com.talha.mpv"
 FIXED_EXT_ID="haamijddaadhbhjfpblfloidmpglfmnk"
 # Chrome Web Store'dan kurulan eklentinin kimliği (install.sh ile aynı tutulmalı)
@@ -46,6 +48,12 @@ mkdir -p "${HOST_DIR}"
 cp "/Library/Application Support/StreamToMpv/mpv_host.py" "${HOST_SCRIPT}"
 chmod 755 "${HOST_SCRIPT}"
 chown -R "${TARGET_USER}:staff" "${HOST_DIR}"
+
+# 1.2.1 ve öncesinin ev klasörüne kurduğu ~/mpv_host: yalnızca bizim dosyalarımız silinir, klasör boşsa kaldırılır
+if [[ -d "${LEGACY_HOST_DIR}" ]]; then
+  rm -f "${LEGACY_HOST_DIR}/mpv_host.py" "${LEGACY_HOST_DIR}/${HOST_NAME}.json"
+  rmdir "${LEGACY_HOST_DIR}" 2>/dev/null || true
+fi
 
 MANIFEST_JSON=$(cat <<JSON
 {
@@ -74,8 +82,6 @@ FIREFOX_MANIFEST_JSON=$(cat <<JSON
 JSON
 )
 
-echo "${MANIFEST_JSON}" > "${HOST_DIR}/${HOST_NAME}.json"
-chown "${TARGET_USER}:staff" "${HOST_DIR}/${HOST_NAME}.json"
 
 APP_SUPPORT="${USER_HOME}/Library/Application Support"
 for NM_DIR in \

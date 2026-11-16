@@ -78,10 +78,12 @@ make
 
 `make` komutu şunları otomatik yapar:
 1. Sisteminizde `mpv` ve `yt-dlp` kurulu değilse Homebrew ile kurar.
-2. `~/mpv_host/mpv_host.py` dosyasını kurar.
-3. Chrome, Chromium, Brave, Edge, Vivaldi, Arc, Opera ve Firefox için Native Messaging izin kayıtlarını (Eklenti ID'si sormadan) otomatik oluşturur ve bağlantıyı test eder.
+2. Host betiğini `~/Library/Application Support/StreamToMpv/mpv_host.py` konumuna kurar (ev klasörünüzün içinde yeni bir klasör açılmaz).
+3. Chrome, Chromium, Brave, Edge, Vivaldi, Arc, Opera ve Firefox içinden kurulu olanlar için Native Messaging izin kayıtlarını (Eklenti ID'si sormadan) otomatik oluşturur ve bağlantıyı test eder. Sonradan yeni bir tarayıcı kurarsanız `make` komutunu yeniden çalıştırın.
 
-> **Güncelleme:** Mağaza güncellemeleri yalnızca eklentiyi günceller. Native host'taki düzeltmeler (ör. VLC + YouTube düzeltmeleri) en son kodu çekip `make` komutunu yeniden çalıştırınca gelir (`make host` yalnızca host'u yeniden kurar).
+> **Güncelleme:** Mağaza güncellemeleri yalnızca eklentiyi günceller. Native host'taki düzeltmeler (ör. VLC + YouTube düzeltmeleri) en son kodu çekip `make` komutunu yeniden çalıştırınca gelir (`make host` yalnızca host'u yeniden kurar). 1.2.1 ve önceki sürümler host'u `~/mpv_host` klasörüne kuruyordu; `make` yeniden çalıştırılınca host taşınır ve bu klasör silinir.
+>
+> **Kaldırma:** `make uninstall`, native host'u ve oluşturduğu tüm tarayıcı kayıtlarını siler. mpv, VLC ve yt-dlp kurulu kalır.
 
 #### 2. Adım: Eklentiyi Tarayıcıya Yükleyin
 
@@ -97,7 +99,7 @@ make
 ### B. Linux Kurulumu
 
 1. `mpv` (ve isteğe bağlı olarak `yt-dlp`) paketini paket yöneticinizle kurun — `make` sizin yerinize `sudo` çalıştırmaz, yalnızca eksikse uyarır.
-2. Klonladığınız klasörde `make` çalıştırın. Host betiği `~/mpv_host/mpv_host.py` konumuna kurulur; Native Messaging manifestleri `~/.config/<tarayıcı>/NativeMessagingHosts` (`$XDG_CONFIG_HOME` dikkate alınır), `~/.mozilla/native-messaging-hosts` ve `~/.librewolf/native-messaging-hosts` altına yazılır.
+2. Klonladığınız klasörde `make` çalıştırın. Host betiği `~/.local/share/stream-to-mpv/mpv_host.py` konumuna kurulur (`$XDG_DATA_HOME` dikkate alınır); Native Messaging manifestleri, kurulu tarayıcılar için `~/.config/<tarayıcı>/NativeMessagingHosts` (`$XDG_CONFIG_HOME` dikkate alınır), `~/.mozilla/native-messaging-hosts` ve `~/.librewolf/native-messaging-hosts` altına yazılır. `make uninstall` hepsini kaldırır.
 3. `chrome://extensions` sayfasında **Load unpacked** ile **`extension`** klasörünü yükleyin (yukarıdaki 2. Adım ile aynı).
 
 > **Not:** Flatpak/Snap tarayıcılar sandbox içinde çalıştığı için ev dizinindeki host programını başlatamaz; dağıtımın kendi paketiyle kurulmuş bir tarayıcı kullanın.
@@ -158,6 +160,9 @@ Proje hiçbir harici JavaScript framework'ü veya bundler gerektirmez. Tüm biri
 ```bash
 # Kurulum, bağlantı doğrulaması ve mobil zip üretimi
 make
+
+# Native host'u ve tarayıcı kayıtlarını kaldır
+make uninstall
 
 # Tüm otomatik test paketlerini çalıştır (Node.js + Python 3 + gerçek mpv/ffmpeg testi)
 make test

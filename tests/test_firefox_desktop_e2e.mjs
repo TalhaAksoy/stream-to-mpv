@@ -39,20 +39,31 @@ await new Promise((resolve, reject) => {
   fixture.on("exit", (c) => reject(new Error(`fixture exited ${c}`)));
 });
 
-// Sahte HOME: native messaging manifesti + mpv sarmalayıcısı
+// Sahte HOME: native host gerçek kurulum betiğiyle (native/install.sh) kurulur, böylece Firefox'un
+// kurulan konumu bulup çalıştırdığı da test edilir. Veri klasöründe bilerek boşluk var (macOS'taki
+// "Application Support" gibi); kullanıcının gerçek ayar klasörlerine yazılmaması için XDG_* sahte HOME'a sabitlenir.
 const home = path.join(tmp, "home");
 const nmDir = path.join(home, ".mozilla", "native-messaging-hosts");
-fs.mkdirSync(nmDir, { recursive: true });
-fs.writeFileSync(
-  path.join(nmDir, "com.talha.mpv.json"),
-  JSON.stringify({
-    name: "com.talha.mpv",
-    description: "test",
-    path: path.join(ROOT, "native/mpv_host.py"),
-    type: "stdio",
-    allowed_extensions: ["stream-to-mpv@talha.dev"]
-  })
-);
+const installEnv = {
+  ...process.env,
+  HOME: home,
+  XDG_CONFIG_HOME: path.join(home, ".config"),
+  XDG_DATA_HOME: path.join(home, "App Data")
+};
+fs.mkdirSync(path.join(home, ".mozilla"), { recursive: true });
+fs.mkdirSync(path.join(home, "mpv_host"), { recursive: true });
+fs.writeFileSync(path.join(home, "mpv_host", "mpv_host.py"), "# eski (1.2.1) kurulum\n");
+fs.writeFileSync(path.join(home, "mpv_host", "com.talha.mpv.json"), "{}\n");
+const install = spawnSync("bash", [path.join(ROOT, "native/install.sh")], { env: installEnv, encoding: "utf8" });
+assert.equal(install.status, 0, install.stderr + install.stdout);
+const installedHost = path.join(home, "App Data", "stream-to-mpv", "mpv_host.py");
+const ffManifest = JSON.parse(fs.readFileSync(path.join(nmDir, "com.talha.mpv.json"), "utf8"));
+assert.equal(ffManifest.path, installedHost, "Firefox manifest must point at the installed host");
+assert.deepEqual(ffManifest.allowed_extensions, ["stream-to-mpv@talha.dev"]);
+assert.equal(fs.readFileSync(installedHost, "utf8"), fs.readFileSync(path.join(ROOT, "native/mpv_host.py"), "utf8"));
+assert.ok(!fs.existsSync(path.join(home, "mpv_host")), "legacy ~/mpv_host must be migrated away");
+assert.ok(!fs.existsSync(path.join(home, ".config", "thorium")), "no folders for browsers that are not installed");
+assert.ok(!fs.existsSync(path.join(home, ".librewolf")), "no folders for browsers that are not installed");
 const binDir = path.join(tmp, "bin");
 const runLog = path.join(tmp, "runs");
 fs.mkdirSync(binDir);
@@ -197,6 +208,17 @@ try {
   assert.equal(fs.readFileSync(path.join(runLog, `${embedRun}.exit`), "utf8").trim(), "0", fs.readFileSync(path.join(runLog, `${embedRun}.out`), "utf8").slice(-1200));
   console.log("  [PASS] Firefox: cross-origin wrapper iframe (JWPlayer config only) resolved and played in real mpv");
   context = topContext;
+
+  console.log("  [PASS] Firefox found and ran the host installed by native/install.sh (data path with a space; legacy ~/mpv_host migrated)");
+
+  // --- make uninstall: host ve kayıt kaldırılır, aynı klasördeki başka dosyalara dokunulmaz ---
+  fs.writeFileSync(path.join(nmDir, "other.host.json"), "{}\n");
+  const uninstall = spawnSync("bash", [path.join(ROOT, "native/install.sh"), "--uninstall"], { env: installEnv, encoding: "utf8" });
+  assert.equal(uninstall.status, 0, uninstall.stderr + uninstall.stdout);
+  assert.ok(!fs.existsSync(path.join(nmDir, "com.talha.mpv.json")), "uninstall must remove the Firefox registration");
+  assert.ok(fs.existsSync(path.join(nmDir, "other.host.json")), "uninstall must keep other native hosts");
+  assert.ok(!fs.existsSync(path.join(home, "App Data", "stream-to-mpv")), "uninstall must remove the host folder");
+  console.log("  [PASS] install.sh --uninstall removed the host and its Firefox registration, kept other hosts");
 
   console.log("All desktop Firefox E2E tests passed!");
   await cleanup();
