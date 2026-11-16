@@ -312,8 +312,44 @@ def build_ytdl_format_selector(preferred_resolution: str) -> str:
     return "bestvideo[protocol*=m3u8]+bestaudio[protocol*=m3u8]/best[protocol*=m3u8]/bestvideo+bestaudio/best"
 
 
+def build_vlc_format_selector(preferred_resolution: str) -> str:
+    """
+    VLC için yt-dlp format dizgesi. VLC 3, ayrı video ve ses HLS listelerini (--input-slave) birlikte
+    oynatamaz: saat senkronizasyonu kilitlenir, siyah ekran ya da ilk karede donma olur. Bu yüzden ayrı
+    parçalar yalnızca düz https (DASH) dosyalarından seçilir; HLS yalnızca ses+video tek akışsa kullanılır.
+    "best"te önce H.264 tercih edilir (VLC'de donanım çözücüyle akıcı); 1080p üstü açıkça seçilirse VP9/AV1 de olur.
+    """
+    pref = (preferred_resolution or "best").strip().lower()
+    if pref == "audio":
+        return "bestaudio[protocol=https]/bestaudio/best"
+
+    h = int(pref) if pref.isdigit() and 144 <= int(pref) <= 4320 else 0
+    cap = f"[height<={h}]" if h else ""
+    split_any = f"bestvideo[protocol=https]{cap}+bestaudio[protocol=https]"
+    split_h264 = f"bestvideo[protocol=https][vcodec^=avc1]{cap}+bestaudio[protocol=https][ext=m4a]"
+    muxed = f"best{cap}[vcodec!=none][acodec!=none]"
+    order = [split_any, split_h264] if h > 1080 else [split_h264, split_any]
+    return "/".join([*order, muxed, "best"])
+
+
+MAX_AVAILABILITY_WAIT_SECONDS = 15.0
+
+
+def wait_for_format_availability(available_at: float) -> None:
+    """
+    yt-dlp'nin bildirdiği "available_at" zamanına kadar bekler (en fazla MAX_AVAILABILITY_WAIT_SECONDS).
+    VLC adresi kendisi açtığından, erken açılırsa YouTube 403 verir ve "unable to open the MRL" hatası çıkar.
+    """
+    if not available_at:
+        return
+    # Sunucu saatiyle küçük farklar için 1 sn pay bırakılır
+    delay = available_at - time.time() + 1.0
+    if delay > 0:
+        time.sleep(min(delay, MAX_AVAILABILITY_WAIT_SECONDS))
+
+
 def resolve_with_ytdlp(
-    url: str, referer: str, user_agent: str, preferred_resolution: str = "best"
+    url: str, referer: str, user_agent: str, preferred_resolution: str = "best", player: str = "mpv"
 ) -> tuple[bool, dict | str]:
     """
     yt-dlp --dump-json ile sayfa URL'sinden oynatılabilir medya URL'lerini (ve gerekli başlıkları) çözümler.
@@ -330,7 +366,9 @@ def resolve_with_ytdlp(
         "--no-warnings",
         "--dump-json",
         "-f",
-        build_ytdl_format_selector(preferred_resolution),
+        build_vlc_format_selector(preferred_resolution)
+        if player == "vlc"
+        else build_ytdl_format_selector(preferred_resolution),
     ]
     if referer:
         cmd.extend(["--referer", referer])
@@ -384,7 +422,13 @@ def resolve_with_ytdlp(
         if not ok_url:
             return False, "yt-dlp returned a non-HTTP URL."
 
-        result = {"url": validated, "audio_url": "", "user_agent": "", "referer": ""}
+        # YouTube bazı istemcilerin adreslerini birkaç saniye sonra açar (yt-dlp "available_at"); öncesinde 403 döner
+        available_at = 0.0
+        for fmt in (requested if isinstance(requested, list) else []) + [info]:
+            if isinstance(fmt, dict) and isinstance(fmt.get("available_at"), (int, float)):
+                available_at = max(available_at, float(fmt["available_at"]))
+
+        result = {"url": validated, "audio_url": "", "user_agent": "", "referer": "", "available_at": available_at}
         if audio_url:
             ok_audio, validated_audio = validate_http_url(audio_url)
             if ok_audio:
@@ -611,8 +655,6 @@ def launch_vlc(
     cmd = [vlc_bin, "--no-qt-privacy-ask"]
     if referer:
         cmd.append(f"--http-referrer={referer}")
-    if user_agent:
-        cmd.append(f"--http-user-agent={user_agent}")
     if preferred_resolution == "audio":
         cmd.append("--no-video")
     elif preferred_resolution.isdigit() and 144 <= int(preferred_resolution) <= 4320:
@@ -629,6 +671,9 @@ def launch_vlc(
 
     # URL yalnızca http(s) olarak doğrulandığı için bayrak olarak yorumlanamaz
     cmd.append(url)
+    # VLC 3 genel --http-user-agent bayrağını yok sayıp "VLC/3.x" gönderir; giriş seçeneği (:opt) olarak verilmeli
+    if user_agent:
+        cmd.append(f":http-user-agent={user_agent}")
     return spawn_detached(cmd, "vlc")
 
 
@@ -712,7 +757,7 @@ def handle_message(msg: dict) -> dict:
         audio_url = ""
         resolved_via = "direct"
         if kind == "page":
-            ok_yt, resolved = resolve_with_ytdlp(target_url, referer, user_agent, preferred_res)
+            ok_yt, resolved = resolve_with_ytdlp(target_url, referer, user_agent, preferred_res, player="vlc")
             if not ok_yt:
                 return {
                     "ok": False,
@@ -724,6 +769,7 @@ def handle_message(msg: dict) -> dict:
             referer = resolved["referer"] or referer
             user_agent = resolved["user_agent"] or user_agent
             resolved_via = "yt-dlp"
+            wait_for_format_availability(resolved.get("available_at", 0))
         ok_launch, result = launch_vlc(
             target_url,
             referer,

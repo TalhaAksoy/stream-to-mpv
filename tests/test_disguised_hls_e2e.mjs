@@ -295,8 +295,9 @@ try {
     assert.ok(res.clicked, `720p missing; menu=${JSON.stringify(res.items)}`);
     run = await readNewRun(before, 45000);
     assert.ok(run.args.includes(`--http-referrer=http://127.0.0.1:${port}/episode?t=RvlcStrict`), `vlc args: ${run.args.join(" ")}`);
-    assert.ok(run.args.some((a) => a.startsWith("--http-user-agent=")), run.args.join(" "));
-    assert.equal(run.args.at(-1), `http://127.0.0.1:${port}/w/RvlcStrict/v0`);
+    // VLC 3 ignores a global --http-user-agent; the host passes it as an input option right after the URL
+    assert.ok(run.args.at(-1).startsWith(":http-user-agent="), run.args.join(" "));
+    assert.equal(run.args.at(-2), `http://127.0.0.1:${port}/w/RvlcStrict/v0`);
     assert.doesNotMatch(run.out, /HTTP 403/, "VLC must not hit 403 (Referer must be passed)");
     assert.match(run.out, /Received first picture/, `real VLC should decode video:\n${run.out.slice(-1500)}`);
     await evalIn(swSession, `chrome.storage.local.set({ player: "mpv" }).then(() => true)`);

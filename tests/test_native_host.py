@@ -17,6 +17,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
+import types
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -249,7 +251,8 @@ sys.stdout.write({repr(stdout_text)})
         finally:
             mpv_host.find_binary = orig_find
 
-        # 9. VLC: başlıklar --http-referrer / --http-user-agent ile aktarılmalı
+        # 9. VLC: Referer --http-referrer ile, User-Agent ise giriş seçeneği (:http-user-agent) olarak aktarılmalı
+        #    (VLC 3 genel --http-user-agent bayrağını yok sayıp "VLC/3.x" gönderir)
         vlc_log = tmp_path / "vlc_args.json"
         mock_vlc = make_mock_binary("mock_vlc", vlc_log)
         try:
@@ -269,10 +272,10 @@ sys.stdout.write({repr(stdout_text)})
             args = wait_for_args(vlc_log)
             assert "--http-referrer=https://site.example.com/watch/1" in args, args
             assert "--no-qt-privacy-ask" in args, "first-run privacy dialog must not block the player window"
-            assert "--http-user-agent=BrowserUA/2.0" in args, args
+            assert not any(a.startswith("--http-user-agent") for a in args), args
             assert "--adaptive-maxheight=720" in args, args
-            assert args[-1] == "https://cdn.example.com/hls/master.m3u8?token=xyz", args
-            print("  [PASS] VLC spawned with --http-referrer, --http-user-agent, resolution cap and stream URL")
+            assert args[-2:] == ["https://cdn.example.com/hls/master.m3u8?token=xyz", ":http-user-agent=BrowserUA/2.0"], args
+            print("  [PASS] VLC spawned with --http-referrer, resolution cap, stream URL and :http-user-agent input option")
         finally:
             mpv_host.find_binary = orig_find
 
@@ -282,13 +285,21 @@ sys.stdout.write({repr(stdout_text)})
         ytdlp_json = json.dumps(
             {
                 "requested_formats": [
-                    {"url": "https://rr1.googlevideo.test/video.m3u8", "vcodec": "avc1", "http_headers": {"User-Agent": "YtUA/1"}},
+                    {
+                        "url": "https://rr1.googlevideo.test/video.m3u8",
+                        "vcodec": "avc1",
+                        "http_headers": {"User-Agent": "YtUA/1"},
+                        "available_at": int(time.time()) + 4,
+                    },
                     {"url": "https://rr1.googlevideo.test/audio.m3u8", "vcodec": "none"},
                 ]
             }
         )
         mock_ytdlp = make_mock_binary("mock_ytdlp", tmp_path / "ytdlp_args.json", ytdlp_json + "\n")
+        sleeps: list[float] = []
+        orig_time = mpv_host.time
         try:
+            mpv_host.time = types.SimpleNamespace(time=time.time, sleep=lambda secs: sleeps.append(secs))
             mpv_host.find_binary = lambda name: (
                 str(mock_vlc2) if name == "vlc" else str(mock_ytdlp) if name == "yt-dlp" else None
             )
@@ -298,12 +309,23 @@ sys.stdout.write({repr(stdout_text)})
             assert res["ok"] is True and res["resolved_via"] == "yt-dlp", res
             args = wait_for_args(vlc_log2)
             assert "--input-slave=https://rr1.googlevideo.test/audio.m3u8" in args, args
-            assert "--http-user-agent=YtUA/1" in args, args
-            assert args[-1] == "https://rr1.googlevideo.test/video.m3u8", args
+            assert args[-2:] == ["https://rr1.googlevideo.test/video.m3u8", ":http-user-agent=YtUA/1"], args
+            # YouTube adresi "available_at" anına kadar 403 döner: VLC o ana kadar beklenip öyle başlatılmalı
+            assert sleeps and 3 <= sleeps[0] <= mpv_host.MAX_AVAILABILITY_WAIT_SECONDS, sleeps
             ytdlp_args = json.loads((tmp_path / "ytdlp_args.json").read_text(encoding="utf-8"))
             assert "--dump-json" in ytdlp_args and ytdlp_args[-1] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-            print("  [PASS] VLC page URL resolved via yt-dlp --dump-json with separate audio as --input-slave")
+            # VLC 3 ayrı video+ses HLS listelerini birlikte oynatamaz (siyah ekran / ilk karede donma):
+            # ayrık parçalar yalnızca https (DASH) dosyalarından seçilmeli, HLS ancak tek akış (ses+video) olabilir
+            fmt = ytdlp_args[ytdlp_args.index("-f") + 1]
+            for alt in fmt.split("/"):
+                if "+" in alt:
+                    assert "m3u8" not in alt and alt.count("[protocol=https]") == 2, fmt
+            assert fmt.split("/")[0].startswith("bestvideo[protocol=https][vcodec^=avc1]"), fmt
+            assert "[height<=2160]" in mpv_host.build_vlc_format_selector("2160").split("/")[0], "4K choice must not be capped to H.264"
+            assert "m3u8" in mpv_host.build_ytdl_format_selector("best"), "mpv keeps its HLS-first selector"
+            print("  [PASS] VLC page URL resolved via yt-dlp (https DASH video+audio, never split HLS) with audio as --input-slave")
         finally:
+            mpv_host.time = orig_time
             mpv_host.find_binary = orig_find
 
         # 11. Harici altyazılar: mpv'ye uzak adresler --sub-file ile (ilki tercih edilen) verilmeli; geçersizler atılmalı.
