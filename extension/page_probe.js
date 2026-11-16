@@ -10,8 +10,8 @@
  * - Sayfa bu yanıtı taklit edebilir; bu yüzden içerik betiği ve arka plan URL'leri yeniden doğrular.
  */
 (() => {
-  if (window.__streamToMpvPageProbe) return;
-  Object.defineProperty(window, "__streamToMpvPageProbe", { value: true });
+  // Sayfaya global işaret bırakılmaz (siteler eklentiyi bununla tespit edebiliyordu). Betik iki kez enjekte
+  // edilirse (Firefox'ta eklenti yeniden yüklenince) iki yanıt gider; içerik betiği ilkini alıp diğerini yok sayar.
 
   const REQUEST_EVENT = "stream-to-mpv:probe-request";
   const RESPONSE_EVENT = "stream-to-mpv:probe-response";

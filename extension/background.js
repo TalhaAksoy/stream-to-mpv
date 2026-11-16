@@ -14,6 +14,8 @@ import {
   isBlockedDomain,
   isMediaSegment,
   googleDriveDirectUrl,
+  classifySubtitleUrl,
+  sortSubtitlesByPreference,
   isValidHttpUrl,
   matchStreamForVideoContext,
   selectBestPlayableStream,
@@ -23,6 +25,21 @@ import {
 const NATIVE_HOST_NAME = "com.talha.mpv";
 const MAX_STREAMS_PER_TAB = 25;
 const MAX_PENDING_REQUESTS = 300;
+
+// onSendHeaders → onHeadersReceived arasında istek başlıklarını (Referer/UA, yönlendirme takma adları) taşıyan
+// kısa ömürlü tablo. Her istekte storage.session'a yazmak tüm istekleri tek kilitte sıraya sokuyordu; bellekte
+// tutulur. Service worker iki olay arasında kapanırsa kayıt kaybolur ve initiator yedeğine düşülür.
+const pendingRequests = new Map();
+// 1.2.1 öncesi sürümler bu tabloyu storage.session'da tutuyordu; kalıntıyı bir kez temizle
+chrome.storage.session?.remove?.("pendingRequests")?.catch?.(() => {});
+
+function rememberPendingRequest(requestId, meta) {
+  pendingRequests.delete(requestId); // ekleme sırasını tazele
+  pendingRequests.set(requestId, meta);
+  while (pendingRequests.size > MAX_PENDING_REQUESTS) {
+    pendingRequests.delete(pendingRequests.keys().next().value);
+  }
+}
 const AUTO_OPEN_COLLECT_MS = 1400; // Master playlist yakalamak için kısa toplama aralığı
 
 // Eşzamanlı storage.session yazmalarında veri yarışını (race condition) önleyen sıralı kilit
@@ -73,7 +90,28 @@ const ANDROID_PLAYERS = {
   chooser: { pkg: "", label: "Choose app" }
 };
 
-const SETTINGS_KEYS = ["autoOpen", "ytdlpFallback", "blockedDomains", "player", "androidPlayer"];
+const SETTINGS_KEYS = ["autoOpen", "ytdlpFallback", "blockedDomains", "extraBlockedDomains", "player", "androidPlayer"];
+const MAX_EXTRA_BLOCKED_DOMAINS = 50;
+const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/;
+
+/**
+ * Kullanıcının eklediği "akış yakalanmayacak" alan adlarını temizler: küçük harf, şema/yol/port/"*." atılır,
+ * geçersizler ve yinelenenler elenir. Varsayılan reklam listesi ayrı tutulur; kullanıcı onu silemez.
+ */
+function sanitizeBlockedDomains(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    if (typeof raw !== "string") continue;
+    let d = raw.trim().toLowerCase();
+    d = d.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").split(/[/?#]/)[0].replace(/:\d+$/, "");
+    d = d.replace(/^\*?\./, "").replace(/\.$/, "");
+    if (!DOMAIN_RE.test(d) || out.includes(d)) continue;
+    out.push(d);
+    if (out.length >= MAX_EXTRA_BLOCKED_DOMAINS) break;
+  }
+  return out;
+}
 let settingsCache = null;
 
 function normalizeSettings(data = {}) {
@@ -81,7 +119,15 @@ function normalizeSettings(data = {}) {
     autoOpen: Boolean(data.autoOpen ?? false), // Varsayılan olarak kesinlikle kapalı
     // YouTube/Twitch/Vimeo vb. sitelerde tek tıklamayla çalışması için varsayılan açık
     ytdlpFallback: Boolean(data.ytdlpFallback ?? true),
-    blockedDomains: Array.isArray(data.blockedDomains) ? data.blockedDomains : DEFAULT_BLOCKED_DOMAINS,
+    extraBlockedDomains: sanitizeBlockedDomains(data.extraBlockedDomains),
+    // Etkin liste = varsayılan reklam alanları + eski sürümlerin sakladığı liste + kullanıcının eklediği alanlar
+    blockedDomains: Array.from(
+      new Set([
+        ...DEFAULT_BLOCKED_DOMAINS,
+        ...sanitizeBlockedDomains(data.blockedDomains),
+        ...sanitizeBlockedDomains(data.extraBlockedDomains)
+      ])
+    ),
     player: DESKTOP_PLAYERS.includes(data.player) ? data.player : "mpv",
     androidPlayer: Object.hasOwn(ANDROID_PLAYERS, data.androidPlayer || "") ? data.androidPlayer : "mpv"
   };
@@ -270,13 +316,7 @@ async function recordStreamCandidate(tabId, candidateData) {
     };
 
     // Eğer sayfa URL'si (ana sayfa/navigasyon) değişmişse ve onUpdated kaçırılmışsa, farklı videoları karıştırma
-    if (pageUrl && tabState.pageUrl && getPageIdentity(pageUrl) !== getPageIdentity(tabState.pageUrl)) {
-      tabState.pageUrl = pageUrl;
-      tabState.pageTitle = pageTitle;
-      tabState.sessionId = `${tabId}_${Date.now()}`;
-      tabState.autoOpenedSessionId = null;
-      tabState.streams = [];
-    } else {
+    if (!resetTabStateIfPageChanged(tabState, pageUrl, pageTitle)) {
       if (pageUrl) tabState.pageUrl = pageUrl;
       if (pageTitle) tabState.pageTitle = pageTitle;
     }
@@ -409,6 +449,25 @@ async function recordStreamCandidate(tabId, candidateData) {
 /**
  * Aynı sekmede farklı bir videoya geçildiğini anlamak için sayfa kimliği çıkarır (hash hariç).
  */
+/**
+ * Sekmenin sayfası değiştiyse (SPA geçişi veya kaçırılmış onUpdated) önceki videoya ait her şeyi (akışlar,
+ * altyazılar, doğrulama adayları) sıfırlar. Hangi kayıt önce gelirse (akış, altyazı, aday) sıfırlamayı o yapar;
+ * böylece yeni bölümün erken gelen altyazısı sonradan gelen akış kaydıyla silinmez. Sıfırlandıysa true döner.
+ */
+function resetTabStateIfPageChanged(tabState, pageUrl, pageTitle) {
+  if (!pageUrl || !tabState.pageUrl || getPageIdentity(pageUrl) === getPageIdentity(tabState.pageUrl)) {
+    return false;
+  }
+  tabState.pageUrl = pageUrl;
+  if (pageTitle) tabState.pageTitle = pageTitle;
+  tabState.sessionId = `${tabState.tabId}_${Date.now()}`;
+  tabState.autoOpenedSessionId = null;
+  tabState.streams = [];
+  tabState.subtitles = [];
+  tabState.probeCandidates = [];
+  return true;
+}
+
 function getPageIdentity(rawUrl) {
   try {
     const u = new URL(rawUrl);
@@ -544,12 +603,84 @@ async function recordProbeCandidate(tabId, candidate) {
       autoOpenedSessionId: null,
       streams: []
     };
+    resetTabStateIfPageChanged(tabState, tabInfo?.url || "", tabInfo?.title || "");
     const list = Array.isArray(tabState.probeCandidates) ? tabState.probeCandidates : [];
     const filtered = list.filter((c) => c.url !== candidate.url);
     filtered.unshift(candidate);
     tabState.probeCandidates = filtered.slice(0, MAX_PROBE_CANDIDATES_PER_TAB);
     await chrome.storage.session.set({ [key]: tabState });
   });
+}
+
+const MAX_SUBTITLES_PER_TAB = 24;
+const MAX_SUBTITLES_PER_OPEN = 8;
+
+async function recordSubtitleCandidate(details, info) {
+  let tabInfo = null;
+  try {
+    tabInfo = await chrome.tabs.get(details.tabId);
+  } catch {
+    return;
+  }
+  let referer = "";
+  for (const h of details.requestHeaders || []) {
+    if ((h.name || "").toLowerCase() === "referer") referer = sanitizeHeaderValue(h.value);
+  }
+  if (!referer && details.initiator && isValidHttpUrl(details.initiator)) {
+    referer = sanitizeHeaderValue(`${details.initiator}/`);
+  }
+  await withSessionLock(async () => {
+    const key = `tab_${details.tabId}`;
+    const stored = await chrome.storage.session.get(key);
+    const tabState = stored[key] || {
+      tabId: details.tabId,
+      pageUrl: tabInfo?.url || "",
+      pageTitle: tabInfo?.title || "",
+      sessionId: `${details.tabId}_${Date.now()}`,
+      autoOpenedSessionId: null,
+      streams: []
+    };
+    resetTabStateIfPageChanged(tabState, tabInfo?.url || "", tabInfo?.title || "");
+    const list = Array.isArray(tabState.subtitles) ? tabState.subtitles : [];
+    if (list.some((s) => s.url === details.url)) return;
+    list.push({
+      url: details.url,
+      frameId: typeof details.frameId === "number" ? details.frameId : 0,
+      lang: info.lang || "",
+      referer,
+      timestamp: Date.now()
+    });
+    tabState.subtitles = list.slice(-MAX_SUBTITLES_PER_TAB);
+    await chrome.storage.session.set({ [key]: tabState });
+  });
+}
+
+/** Bir iframe yeni belgeye geçerken o frame'e ait eski altyazıları siler (yalnızca gerçekten varsa yazar). */
+async function dropFrameSubtitles(tabId, frameId) {
+  await withSessionLock(async () => {
+    const key = `tab_${tabId}`;
+    const stored = await chrome.storage.session.get(key);
+    const tabState = stored[key];
+    const list = Array.isArray(tabState?.subtitles) ? tabState.subtitles : [];
+    const kept = list.filter((s) => s.frameId !== frameId);
+    if (kept.length === list.length) return;
+    tabState.subtitles = kept;
+    await chrome.storage.session.set({ [key]: tabState });
+  });
+}
+
+/** Açılan akışın frame'inde yakalanan altyazılar, tercih sırasıyla (tarayıcı dili, İngilizce, diğerleri). */
+function selectSubtitlesForStream(tabState, record) {
+  const all = Array.isArray(tabState?.subtitles) ? tabState.subtitles : [];
+  const frameId = typeof record?.frameId === "number" ? record.frameId : 0;
+  const inFrame = all.filter((s) => s.frameId === frameId && isValidHttpUrl(s.url));
+  let uiLanguage = "";
+  try {
+    uiLanguage = chrome.i18n?.getUILanguage?.() || "";
+  } catch {
+    uiLanguage = "";
+  }
+  return sortSubtitlesByPreference(inFrame, uiLanguage).slice(0, MAX_SUBTITLES_PER_OPEN);
 }
 
 // Drive videoplayback istekleri saniyede birkaç kez tekrarlanır; aynı frame/dosya için tek kayıt yeterli.
@@ -589,12 +720,16 @@ addWebRequestListener(
       await recordGoogleDriveStream(details, driveDirect);
       return;
     }
+    // Oynatıcının çektiği harici altyazı dosyaları (.vtt/.srt/.ass). Segment filtresinden önce: .vtt/.srt orada
+    // HLS altyazı parçası sayılıp atlanır.
+    const subtitleInfo = classifySubtitleUrl(details.url);
+    if (subtitleInfo) {
+      await recordSubtitleCandidate(details, subtitleInfo);
+      return;
+    }
     // Video/ses segmentleri (.ts, .m4s, .jpeg kılıklı HLS parçaları vb.) her saniye onlarca istek üretir;
     // bunlar için depolama kilidine girmeden erken çık.
     if (isMediaSegment(details.url)) return;
-
-    const settings = await getSettings();
-    if (isBlockedDomain(details.url, settings.blockedDomains)) return;
 
     let referer = "";
     let userAgent = "";
@@ -614,36 +749,31 @@ addWebRequestListener(
       referer = sanitizeHeaderValue(details.initiator);
     }
 
-    // URL üzerinden doğrudan sınıflandırma yapılabiliyorsa kaydet, ayrıca onHeadersReceived için pending'de tut
-    let existingAliases = [];
-    await withSessionLock(async () => {
-      const stored = await chrome.storage.session.get("pendingRequests");
-      const pending = stored.pendingRequests || {};
-      const prevMeta = pending[details.requestId];
-      existingAliases = Array.isArray(prevMeta?.aliasUrls) ? prevMeta.aliasUrls : [];
-
-      pending[details.requestId] = {
-        url: details.url,
-        tabId: details.tabId,
-        frameId: typeof details.frameId === "number" ? details.frameId : (prevMeta?.frameId ?? 0),
-        referer: referer || prevMeta?.referer || "",
-        userAgent: userAgent || prevMeta?.userAgent || "",
-        aliasUrls: existingAliases,
-        timestamp: Date.now()
-      };
-
-      // Bellek sınırı: eski pending kayıtlarını temizle
-      const keys = Object.keys(pending);
-      if (keys.length > MAX_PENDING_REQUESTS) {
-        keys
-          .sort((a, b) => pending[a].timestamp - pending[b].timestamp)
-          .slice(0, keys.length - MAX_PENDING_REQUESTS)
-          .forEach((k) => delete pending[k]);
-      }
-
-      await chrome.storage.session.set({ pendingRequests: pending });
+    // onHeadersReceived için başlıkları sakla (await'ten önce, eşzamanlı: yanıt olayıyla yarışmasın)
+    const prevMeta = pendingRequests.get(details.requestId);
+    const existingAliases = Array.isArray(prevMeta?.aliasUrls) ? prevMeta.aliasUrls : [];
+    rememberPendingRequest(details.requestId, {
+      url: details.url,
+      tabId: details.tabId,
+      frameId: typeof details.frameId === "number" ? details.frameId : (prevMeta?.frameId ?? 0),
+      referer: referer || prevMeta?.referer || "",
+      userAgent: userAgent || prevMeta?.userAgent || "",
+      aliasUrls: existingAliases
     });
 
+    // Gömülü oynatıcı iframe'i yeni bir sayfaya geçiyor (bölüm/sunucu değişimi): üst sayfa adresi aynı kalsa da
+    // o frame'de yakalanmış eski altyazılar artık başka bir videoya ait.
+    if (details.type === "sub_frame" && typeof details.frameId === "number") {
+      await dropFrameSubtitles(details.tabId, details.frameId);
+    }
+
+    const settings = await getSettings();
+    if (isBlockedDomain(details.url, settings.blockedDomains)) {
+      pendingRequests.delete(details.requestId);
+      return;
+    }
+
+    // URL üzerinden doğrudan sınıflandırma yapılabiliyorsa kaydet
     const urlClassified = classifyCandidate(details.url, "");
     if (urlClassified) {
       await recordStreamCandidate(details.tabId, {
@@ -680,27 +810,20 @@ chrome.webRequest.onBeforeRedirect?.addListener(
     const fromDedupe = computeDedupeKey(details.url);
     const toDedupe = computeDedupeKey(details.redirectUrl);
 
+    const prevMeta = pendingRequests.get(details.requestId);
+    const nextAliases = Array.from(new Set([...(prevMeta?.aliasUrls || []), details.url, fromDedupe]));
+    rememberPendingRequest(details.requestId, {
+      url: details.redirectUrl,
+      tabId: details.tabId,
+      frameId: typeof details.frameId === "number" ? details.frameId : (prevMeta?.frameId ?? 0),
+      referer: prevMeta?.referer || sanitizeHeaderValue(details.initiator || ""),
+      userAgent: prevMeta?.userAgent || "",
+      aliasUrls: nextAliases
+    });
+
     await withSessionLock(async () => {
       const tabKey = `tab_${details.tabId}`;
-      const [storedPending, storedTab] = await Promise.all([
-        chrome.storage.session.get("pendingRequests"),
-        chrome.storage.session.get(tabKey)
-      ]);
-      const pending = storedPending.pendingRequests || {};
-      const prevMeta = pending[details.requestId];
-      const nextAliases = Array.from(
-        new Set([...(prevMeta?.aliasUrls || []), details.url, fromDedupe])
-      );
-
-      pending[details.requestId] = {
-        url: details.redirectUrl,
-        tabId: details.tabId,
-        frameId: typeof details.frameId === "number" ? details.frameId : (prevMeta?.frameId ?? 0),
-        referer: prevMeta?.referer || sanitizeHeaderValue(details.initiator || ""),
-        userAgent: prevMeta?.userAgent || "",
-        aliasUrls: nextAliases,
-        timestamp: Date.now()
-      };
+      const storedTab = await chrome.storage.session.get(tabKey);
 
       const tabState = storedTab[tabKey];
       if (tabState && Array.isArray(tabState.streams)) {
@@ -730,12 +853,9 @@ chrome.webRequest.onBeforeRedirect?.addListener(
             entry.updatedAt = Date.now();
           }
           tabState.streams = sortStreams(tabState.streams);
-          await chrome.storage.session.set({ pendingRequests: pending, [tabKey]: tabState });
-          return;
+          await chrome.storage.session.set({ [tabKey]: tabState });
         }
       }
-
-      await chrome.storage.session.set({ pendingRequests: pending });
     });
   },
   { urls: ["http://*/*", "https://*/*"] }
@@ -756,16 +876,8 @@ addWebRequestListener(
       return;
     }
 
-    let reqMeta = null;
-    await withSessionLock(async () => {
-      const stored = await chrome.storage.session.get("pendingRequests");
-      const pending = stored.pendingRequests || {};
-      reqMeta = pending[details.requestId] || null;
-      if (reqMeta) {
-        delete pending[details.requestId];
-        await chrome.storage.session.set({ pendingRequests: pending });
-      }
-    });
+    const reqMeta = pendingRequests.get(details.requestId) || null;
+    pendingRequests.delete(details.requestId);
 
     const settings = await getSettings();
     if (isBlockedDomain(details.url, settings.blockedDomains)) return;
@@ -852,15 +964,8 @@ addWebRequestListener(
  * İstek hata ile biterse pending tablosundan temizle.
  */
 chrome.webRequest.onErrorOccurred.addListener(
-  async (details) => {
-    await withSessionLock(async () => {
-      const stored = await chrome.storage.session.get("pendingRequests");
-      const pending = stored.pendingRequests || {};
-      if (pending[details.requestId]) {
-        delete pending[details.requestId];
-        await chrome.storage.session.set({ pendingRequests: pending });
-      }
-    });
+  (details) => {
+    pendingRequests.delete(details.requestId);
   },
   { urls: ["http://*/*", "https://*/*"] }
 );
@@ -1040,6 +1145,7 @@ async function openStreamInMpv(streamRecord, options = {}) {
 
   // Sekmedeki en güncel URL'yi kullandığımızdan emin ol
   let latestRecord = streamRecord;
+  let subtitles = [];
   if (typeof streamRecord.tabId === "number") {
     const stored = await chrome.storage.session.get(`tab_${streamRecord.tabId}`);
     const tabState = stored[`tab_${streamRecord.tabId}`];
@@ -1047,6 +1153,7 @@ async function openStreamInMpv(streamRecord, options = {}) {
       const found = tabState.streams.find((s) => s.dedupeKey === streamRecord.dedupeKey);
       if (found) latestRecord = found;
     }
+    subtitles = selectSubtitlesForStream(tabState, { frameId: streamRecord.frameId ?? latestRecord.frameId });
   }
 
   // Eğer kullanıcı belirli bir çözünürlük seçtiyse (örn. maxHeight = 720 veya "audio")
@@ -1131,7 +1238,9 @@ async function openStreamInMpv(streamRecord, options = {}) {
     use_ytdlp_fallback: isPageFallback && Boolean(options.useYtdlpFallback ?? settings.ytdlpFallback),
     // Doğrulanmış HLS (uzantısız /w/<token> dahil) -> host mpv'de HLS demuxer'ını zorlayabilsin
     stream_format: !isPageFallback && isOpeningPlaylist(latestRecord, targetUrl) ? "hls" : "",
-    preferred_resolution: String(requestedResolution)
+    preferred_resolution: String(requestedResolution),
+    // Oynatıcının yüklediği harici altyazılar (ilk eleman tercih edilen dil); host mpv/VLC'ye ekler
+    subtitles: isPageFallback ? [] : subtitles.map((s) => ({ url: s.url, lang: s.lang || "" }))
   };
 
   if (!(await hasNativeMessagingPermission())) {
@@ -1285,9 +1394,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               typeof message.ytdlpFallback === "boolean"
                 ? message.ytdlpFallback
                 : current.ytdlpFallback,
-            blockedDomains: Array.isArray(message.blockedDomains)
-              ? message.blockedDomains
-              : current.blockedDomains,
+            extraBlockedDomains: Array.isArray(message.extraBlockedDomains)
+              ? sanitizeBlockedDomains(message.extraBlockedDomains)
+              : current.extraBlockedDomains,
             player: DESKTOP_PLAYERS.includes(message.player) ? message.player : current.player,
             androidPlayer: Object.hasOwn(ANDROID_PLAYERS, message.androidPlayer || "")
               ? message.androidPlayer
@@ -1713,8 +1822,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             const androidIntents = {};
             const streamUrls = {};
+            // Masaüstünde de gönderilir: menü, segmentleri resim CDN'inde gizli akışları bununla tespit eder
+            if (isValidHttpUrl(latest.url)) streamUrls.best = latest.url;
             if (isAndroid && isValidHttpUrl(latest.url)) {
-              streamUrls.best = latest.url;
               androidIntents.best = buildAndroidMpvIntentUri(latest.url, tabTitle);
               for (const h of heights) {
                 const vUrl = heightMap[h];

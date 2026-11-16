@@ -14,6 +14,9 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
+import time
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,7 +32,7 @@ CHROME_EXT_ORIGIN_REGEX = re.compile(r"^chrome-extension://[a-p]{32}/?$")
 GECKO_EXT_ID = "stream-to-mpv@talha.dev"
 
 # Host sürümü (eklenti eski bir ~/mpv_host kopyasını ping ile tespit edebilsin diye)
-HOST_VERSION = "1.2.0"
+HOST_VERSION = "1.2.1"
 
 # İzin verilen harici oynatıcılar (yol asla mesajdan alınmaz)
 SUPPORTED_PLAYERS = ("mpv", "vlc")
@@ -444,6 +447,75 @@ def origin_from_referer(referer: str) -> str:
     return ""
 
 
+MAX_SUBTITLES = 8
+MAX_SUBTITLE_BYTES = 4 * 1024 * 1024
+SUBTITLE_TEMP_PREFIX = "stream-to-mpv-subs-"
+
+
+def parse_subtitles(raw) -> list[str]:
+    """Eklentiden gelen altyazı listesini (ilk eleman tercih edilen) doğrular; geçerli http(s) URL'leri döndürür."""
+    urls: list[str] = []
+    if not isinstance(raw, list):
+        return urls
+    for item in raw[:MAX_SUBTITLES]:
+        url = item.get("url", "") if isinstance(item, dict) else ""
+        ok, value = validate_http_url(url)
+        if ok and value not in urls:
+            urls.append(value)
+    return urls
+
+
+def cleanup_old_subtitle_dirs(max_age_seconds: int = 24 * 3600) -> None:
+    base = Path(tempfile.gettempdir())
+    now = time.time()
+    try:
+        for entry in base.glob(f"{SUBTITLE_TEMP_PREFIX}*"):
+            try:
+                if entry.is_dir() and now - entry.stat().st_mtime > max_age_seconds and entry.owner() == Path.home().owner():
+                    shutil.rmtree(entry, ignore_errors=True)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
+def download_subtitle(url: str, referer: str, user_agent: str) -> str:
+    """
+    Altyazıyı (Referer / User-Agent ile) özel bir geçici klasöre indirir ve yerel yolunu döndürür.
+    VLC uzak altyazıyı türünü dosya uzantısından anladığı için uzantısız adresleri (ör. .../track_0_en) açamaz;
+    yerel dosyaya içeriğe göre doğru uzantı verilir. Başarısızsa "".
+    """
+    headers = {"User-Agent": user_agent or "Mozilla/5.0"}
+    if referer:
+        headers["Referer"] = referer
+        origin_val = origin_from_referer(referer)
+        if origin_val:
+            headers["Origin"] = origin_val
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as res:
+            data = res.read(MAX_SUBTITLE_BYTES + 1)
+    except Exception as exc:
+        log_stderr(f"Subtitle download failed: {type(exc).__name__}")
+        return ""
+    if not data or len(data) > MAX_SUBTITLE_BYTES:
+        return ""
+    head = data[:200].lstrip(b"\xef\xbb\xbf").lstrip()
+    if head.startswith(b"WEBVTT"):
+        ext = ".vtt"
+    elif head.startswith(b"[Script Info]"):
+        ext = ".ass"
+    elif re.match(rb"\d+\s*\r?\n\d\d:\d\d", head):
+        ext = ".srt"
+    else:
+        return ""
+    cleanup_old_subtitle_dirs()
+    folder = tempfile.mkdtemp(prefix=SUBTITLE_TEMP_PREFIX)
+    path = Path(folder) / f"subtitle{ext}"
+    path.write_bytes(data)
+    return str(path)
+
+
 def launch_mpv(
     url: str,
     referer: str,
@@ -452,6 +524,7 @@ def launch_mpv(
     preferred_resolution: str = "best",
     title: str = "",
     force_hls: bool = False,
+    subtitles: list[str] | None = None,
 ) -> tuple[bool, dict]:
     """
     mpv oynatıcısını subprocess.Popen ile ayrı oturumda (start_new_session=True) ve
@@ -504,6 +577,10 @@ def launch_mpv(
         if user_agent:
             cmd.append(f"--user-agent={user_agent}")
 
+        # Harici altyazılar: mpv uzak dosyayı aynı Referer/User-Agent ile kendisi çeker ve ilkini seçer
+        for sub_url in subtitles or []:
+            cmd.append(f"--sub-file={sub_url}")
+
     # URL'nin bayrak (flag) olarak yorumlanmasını önlemek için '--' ayırıcı kullan
     cmd.extend(["--", url])
     return spawn_detached(cmd, "mpv")
@@ -516,6 +593,7 @@ def launch_vlc(
     preferred_resolution: str = "best",
     audio_url: str = "",
     title: str = "",
+    subtitles: list[str] | None = None,
 ) -> tuple[bool, dict]:
     """
     VLC oynatıcısını Referer / User-Agent başlıklarıyla güvenli biçimde başlatır.
@@ -543,6 +621,11 @@ def launch_vlc(
         cmd.append(f"--input-slave={audio_url}")
     if title:
         cmd.append(f"--meta-title={title}")
+    if subtitles:
+        # VLC tek --sub-file alır ve uzak altyazının türünü uzantıdan anlar: tercih edilen altyazı indirilip verilir
+        local_sub = download_subtitle(subtitles[0], referer, user_agent)
+        if local_sub:
+            cmd.append(f"--sub-file={local_sub}")
 
     # URL yalnızca http(s) olarak doğrulandığı için bayrak olarak yorumlanamaz
     cmd.append(url)
@@ -623,6 +706,7 @@ def handle_message(msg: dict) -> dict:
     force_hls = stream_format == "hls" and not (path_lower.endswith(".m3u8") or path_lower.endswith(".m3u"))
     if kind not in ("stream", "page"):
         kind = "page" if (use_ytdlp and not looks_like_direct_stream(target_url)) else "stream"
+    subtitles = parse_subtitles(msg.get("subtitles")) if kind == "stream" else []
 
     if player == "vlc":
         audio_url = ""
@@ -647,6 +731,7 @@ def handle_message(msg: dict) -> dict:
             preferred_resolution=preferred_res,
             audio_url=audio_url,
             title=title,
+            subtitles=subtitles,
         )
         if ok_launch:
             result["resolved_via"] = resolved_via
@@ -671,6 +756,7 @@ def handle_message(msg: dict) -> dict:
         preferred_resolution=preferred_res,
         title=title,
         force_hls=force_hls and kind == "stream",
+        subtitles=subtitles,
     )
     if ok_launch:
         result["resolved_via"] = resolved_via

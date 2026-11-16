@@ -11,6 +11,7 @@ Doğrulanan senaryolar:
 """
 
 import json
+import shutil
 import os
 import struct
 import subprocess
@@ -305,7 +306,65 @@ sys.stdout.write({repr(stdout_text)})
         finally:
             mpv_host.find_binary = orig_find
 
-        # 11. İzin listesinde olmayan oynatıcı / yol reddedilmeli; ping oynatıcı durumlarını döndürmeli
+        # 11. Harici altyazılar: mpv'ye uzak adresler --sub-file ile (ilki tercih edilen) verilmeli; geçersizler atılmalı.
+        #     VLC'ye ise tercih edilen altyazı Referer ile indirilip uzantısı içerikten belirlenmiş yerel dosya olarak.
+        import http.server
+        import threading
+
+        class SubHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                if self.headers.get("Referer") != "https://player.example.com/":
+                    self.send_response(403)
+                    self.end_headers()
+                    return
+                body = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        sub_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SubHandler)
+        threading.Thread(target=sub_srv.serve_forever, daemon=True).start()
+        sub_url = f"http://127.0.0.1:{sub_srv.server_address[1]}/anime/x/subtitles/track_0_en"
+        subs_msg = [{"url": sub_url, "lang": "en"}, {"url": "https://subs.example.com/ara-9.vtt", "lang": "ar"}, {"url": "file:///etc/passwd"}]
+        mpv_log_sub = tmp_path / "mpv_args_subs.json"
+        mock_mpv_sub = make_mock_binary("mock_mpv_sub", mpv_log_sub)
+        vlc_log_sub = tmp_path / "vlc_args_subs.json"
+        mock_vlc_sub = make_mock_binary("mock_vlc_sub", vlc_log_sub)
+        try:
+            mpv_host.find_binary = lambda name: str(mock_mpv_sub) if name == "mpv" else None
+            res = mpv_host.handle_message(
+                {"action": "open", "player": "mpv", "kind": "stream", "url": "https://cdn.example.com/master.m3u8",
+                 "referer": "https://player.example.com/", "subtitles": subs_msg}
+            )
+            assert res["ok"] is True, res
+            args = wait_for_args(mpv_log_sub)
+            sub_args = [a for a in args if a.startswith("--sub-file=")]
+            assert sub_args == [f"--sub-file={sub_url}", "--sub-file=https://subs.example.com/ara-9.vtt"], args
+            assert args.index(sub_args[0]) < args.index("--"), "subtitle options must come before the URL separator"
+
+            mpv_host.find_binary = lambda name: str(mock_vlc_sub) if name == "vlc" else None
+            res = mpv_host.handle_message(
+                {"action": "open", "player": "vlc", "kind": "stream", "url": "https://cdn.example.com/master.m3u8",
+                 "referer": "https://player.example.com/", "subtitles": subs_msg}
+            )
+            assert res["ok"] is True, res
+            args = wait_for_args(vlc_log_sub)
+            vlc_sub = [a for a in args if a.startswith("--sub-file=")]
+            assert len(vlc_sub) == 1, args
+            local = Path(vlc_sub[0].split("=", 1)[1])
+            assert local.suffix == ".vtt" and local.read_bytes().startswith(b"WEBVTT"), local
+            shutil.rmtree(local.parent, ignore_errors=True)
+            print("  [PASS] Subtitles: mpv gets remote --sub-file URLs (preferred first); VLC gets the preferred one downloaded with Referer as a local .vtt")
+        finally:
+            mpv_host.find_binary = orig_find
+            sub_srv.shutdown()
+
+        # 12. İzin listesinde olmayan oynatıcı / yol reddedilmeli; ping oynatıcı durumlarını döndürmeli
         res = mpv_host.handle_message({"action": "open", "player": "/bin/sh", "url": "https://example.com/a.mp4"})
         assert res["ok"] is False and res["error_code"] == "INVALID_PLAYER", res
         pong = mpv_host.handle_message({"action": "ping"})

@@ -18,6 +18,8 @@ const playerSelect = document.getElementById("playerSelect");
 const androidPlayerSelect = document.getElementById("androidPlayerSelect");
 const desktopPlayerRow = document.getElementById("desktopPlayerRow");
 const androidPlayerRow = document.getElementById("androidPlayerRow");
+const blocklistInput = document.getElementById("blocklistInput");
+const blocklistSaveBtn = document.getElementById("blocklistSaveBtn");
 
 const PLAYER_LABELS = {
   mpv: "mpv",
@@ -87,6 +89,7 @@ async function initPopup() {
       ytdlpToggle.checked = Boolean(stateRes.settings?.ytdlpFallback);
       playerSelect.value = stateRes.settings?.player || "mpv";
       androidPlayerSelect.value = stateRes.settings?.androidPlayer || "mpv";
+      blocklistInput.value = (stateRes.settings?.extraBlockedDomains || []).join("\n");
       setPlayerNameLabels(playerSelect.value);
 
       const currentTabData = (stateRes.tabsData || []).find((t) => t.tabId === activeTab?.id);
@@ -278,6 +281,24 @@ androidPlayerSelect.addEventListener("change", async () => {
   await chrome.runtime.sendMessage({ type: "SET_SETTINGS", androidPlayer: androidPlayerSelect.value });
   setPlayerNameLabels(androidPlayerSelect.value);
   if (currentPlatform === "android") await refreshAndroidLaunchTarget();
+});
+
+blocklistSaveBtn?.addEventListener("click", async () => {
+  const entries = blocklistInput.value.split(/[\s,]+/).filter(Boolean);
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "SET_SETTINGS", extraBlockedDomains: entries });
+    const saved = res?.settings?.extraBlockedDomains || [];
+    blocklistInput.value = saved.join("\n");
+    const dropped = entries.length - saved.length;
+    showStatus(
+      dropped > 0
+        ? `Saved ${saved.length} domain(s); ${dropped} invalid or duplicate entr${dropped === 1 ? "y was" : "ies were"} skipped.`
+        : `Saved ${saved.length} domain(s).`,
+      dropped > 0 ? "info" : "success"
+    );
+  } catch (err) {
+    showStatus(err?.message || "Could not save the list.", "error");
+  }
 });
 
 ytdlpToggle.addEventListener("change", async () => {

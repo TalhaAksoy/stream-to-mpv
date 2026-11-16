@@ -215,6 +215,56 @@ export function isMediaSegment(rawUrl, contentType = "") {
  * dosyanın çerezsiz, Range destekli orijinal MP4 adresini üretir. Drive'ın kendi videoplayback adresleri
  * DRIVE_STREAM çerezine bağlıdır ve MSE için ayrık izlerdir; harici oynatıcıda açılamaz. Eşleşmezse "" döner.
  */
+// Harici altyazı dosyaları (WebVTT / SRT / ASS). HLS'nin altyazı parçaları, önizleme küçük resimleri (thumbnails.vtt)
+// ve sprite'lar hariç tutulur.
+const SUBTITLE_EXT_RE = /\.(vtt|srt|ass|ssa)$/i;
+const SUBTITLE_DIR_RE = /\/(?:subtitles?|captions?|subs)\//i;
+const SUBTITLE_EXCLUDE_RE = /thumb|sprite|preview|storyboard|(?:seg|segment|fragment|chunk)[-_]?\d+|\/\d+\.(?:vtt|srt)$/i;
+const SUBTITLE_LANG_ALIASES = {
+  eng: "en", tur: "tr", ara: "ar", chi: "zh", zho: "zh", spa: "es", por: "pt", fre: "fr", fra: "fr",
+  ger: "de", deu: "de", ita: "it", rus: "ru", jpn: "ja", ind: "id", vie: "vi", tha: "th", kor: "ko",
+  may: "ms", msa: "ms", hin: "hi", pol: "pl", dut: "nl", nld: "nl", ukr: "uk", per: "fa", fas: "fa", heb: "he"
+};
+const SUBTITLE_LANGS_2 = new Set(Object.values(SUBTITLE_LANG_ALIASES));
+
+/**
+ * Bir isteğin harici altyazı dosyası olup olmadığını söyler; öyleyse dosya adından dil tahmini yapar.
+ * Örn. ".../subtitles/eng-2.vtt" -> { lang: "en" }, ".../subtitles/track_0_en" -> { lang: "en" }. Değilse null.
+ */
+export function classifySubtitleUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const path = parsed.pathname;
+  if (!SUBTITLE_EXT_RE.test(path) && !SUBTITLE_DIR_RE.test(path)) return null;
+  if (SUBTITLE_EXCLUDE_RE.test(path)) return null;
+  const base = (path.split("/").pop() || "").replace(SUBTITLE_EXT_RE, "").toLowerCase();
+  let lang = "";
+  for (const token of base.split(/[-_.\s]+/)) {
+    if (SUBTITLE_LANG_ALIASES[token]) {
+      lang = SUBTITLE_LANG_ALIASES[token];
+      break;
+    }
+    if (SUBTITLE_LANGS_2.has(token)) {
+      lang = token;
+      break;
+    }
+  }
+  return { lang };
+}
+
+/** Altyazıları tercih sırasına dizer: önce tarayıcı dili, sonra İngilizce; aynı sırada en son yakalanan önde. */
+export function sortSubtitlesByPreference(subtitles, uiLanguage = "") {
+  const primary = String(uiLanguage || "").toLowerCase().split(/[-_]/)[0];
+  const rank = (s) => (primary && s.lang === primary ? 0 : s.lang === "en" ? 1 : 2);
+  // Aynı dil sırasında en son yakalanan öne: oynatıcı aynı frame'de bölüm değiştirdiyse eski bölümün altyazısı seçilmesin
+  return [...subtitles].map((s, i) => ({ s, i })).sort((a, b) => rank(a.s) - rank(b.s) || b.i - a.i).map((x) => x.s);
+}
+
 function isGoogleDriveDirectStreamUrl(rawUrl) {
   try {
     return new URL(rawUrl).hostname.toLowerCase() === "drive.usercontent.google.com";

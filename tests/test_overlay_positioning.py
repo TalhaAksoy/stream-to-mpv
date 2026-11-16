@@ -376,7 +376,7 @@ def main() -> None:
     content_js = CONTENT_JS_PATH.read_text(encoding="utf-8")
     port = pick_free_port()
 
-    with tempfile.TemporaryDirectory(prefix="mpv_ui_test_") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="mpv_ui_test_", ignore_cleanup_errors=True) as tmp_dir:
         html_file = Path(tmp_dir) / "test.html"
         html_file.write_text(build_test_html(content_js), encoding="utf-8")
         profile_dir = Path(tmp_dir) / "profile"

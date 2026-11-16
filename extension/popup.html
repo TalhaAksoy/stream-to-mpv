@@ -197,6 +197,34 @@
       border: 1px solid rgba(41, 128, 185, 0.45);
       color: #85c1e9;
     }
+
+    .blocklist summary {
+      cursor: pointer;
+      font-size: 12.5px;
+      color: var(--text-primary);
+      user-select: none;
+    }
+
+    .blocklist[open] summary {
+      margin-bottom: 6px;
+    }
+
+    .blocklist textarea {
+      width: 100%;
+      min-height: 64px;
+      resize: vertical;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-primary);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      padding: 6px;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .blocklist .btn {
+      margin-top: 6px;
+      padding: 6px 10px;
+    }
   </style>
 </head>
 <body>
@@ -258,6 +286,12 @@
       <span>yt-dlp URL fallback</span>
       <input type="checkbox" id="ytdlpToggle" />
     </label>
+    <details class="blocklist" id="blocklistDetails">
+      <summary>Ignored stream domains</summary>
+      <p class="hint-text">Streams served from these domains (and their subdomains) are never captured. One per line. Common ad servers are always ignored.</p>
+      <textarea id="blocklistInput" spellcheck="false" autocapitalize="off" placeholder="ads.example.com"></textarea>
+      <button id="blocklistSaveBtn" class="btn" type="button">Save</button>
+    </details>
   </div>
 
   <script type="module" src="popup.js"></script>

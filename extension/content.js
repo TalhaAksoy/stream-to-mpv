@@ -545,11 +545,12 @@
       // Yoksay
     }
 
-    const clientConfigs = [
+    const withVisitor = (client) => ({ ...client, hl: "en", ...(visitorData ? { visitorData } : {}) });
+    const hlsClients = [
       {
         headerId: "101",
         headerVer: "1.02",
-        client: {
+        client: withVisitor({
           clientName: "VISIONOS",
           clientVersion: "1.02",
           deviceMake: "Apple",
@@ -557,29 +558,39 @@
           userAgent:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
           osName: "visionOS",
-          osVersion: "26.5.23O471",
-          hl: "en",
-          ...(visitorData ? { visitorData } : {})
-        }
+          osVersion: "26.5.23O471"
+        })
       },
       {
         headerId: "5",
         headerVer: "21.26.4",
-        client: {
+        client: withVisitor({
           clientName: "IOS",
           clientVersion: "21.26.4",
           deviceMake: "Apple",
           deviceModel: "iPhone16,2",
           userAgent: "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
           osName: "iPhone",
-          osVersion: "18.3.2.22D82",
-          hl: "en",
-          ...(visitorData ? { visitorData } : {})
-        }
+          osVersion: "18.3.2.22D82"
+        })
       }
     ];
+    // ANDROID_VR istemcisi şifresiz, tek dosya (ses + görüntü) 360p MP4 (itag 18) verir.
+    const progressiveClient = {
+      headerId: "28",
+      headerVer: "1.60.19",
+      client: withVisitor({
+        clientName: "ANDROID_VR",
+        clientVersion: "1.60.19",
+        deviceMake: "Oculus",
+        deviceModel: "Quest 3",
+        osName: "Android",
+        osVersion: "12L",
+        androidSdkVersion: 32
+      })
+    };
 
-    for (const cfg of clientConfigs) {
+    const fetchPlayer = async (cfg) => {
       try {
         const res = await fetch("/youtubei/v1/player?prettyPrint=false", {
           method: "POST",
@@ -590,33 +601,54 @@
             "X-YouTube-Client-Version": cfg.headerVer,
             ...(visitorData ? { "X-Goog-Visitor-Id": visitorData } : {})
           },
-          body: JSON.stringify({
-            videoId,
-            context: { client: cfg.client },
-            contentCheckOk: true,
-            racyCheckOk: true
-          })
+          body: JSON.stringify({ videoId, context: { client: cfg.client }, contentCheckOk: true, racyCheckOk: true })
         });
-
-        if (!res.ok) continue;
-        const data = await res.json();
-        const hlsUrl = data?.streamingData?.hlsManifestUrl;
-        if (hlsUrl && typeof hlsUrl === "string" && hlsUrl.startsWith("https://")) {
-          const entry = {
-            videoId,
-            streamUrl: hlsUrl,
-            title: data?.videoDetails?.title || document.title || "",
-            timestamp: Date.now()
-          };
-          ytAndroidHlsCache.set(videoId, entry);
-          return entry;
-        }
+        return res.ok ? await res.json() : null;
       } catch {
-        // Sonraki istemci profilini dene
+        return null;
       }
-    }
+    };
 
-    return null;
+    const findHls = async () => {
+      for (const cfg of hlsClients) {
+        const data = await fetchPlayer(cfg);
+        const hlsUrl = data?.streamingData?.hlsManifestUrl;
+        if (typeof hlsUrl === "string" && hlsUrl.startsWith("https://")) {
+          return { hlsUrl, title: data?.videoDetails?.title || "" };
+        }
+      }
+      return null;
+    };
+    const findProgressive = async () => {
+      const data = await fetchPlayer(progressiveClient);
+      const f18 = (data?.streamingData?.formats || []).find((f) => f?.itag === 18 && typeof f.url === "string");
+      return f18?.url?.startsWith("https://") ? { progressiveUrl: f18.url, title: data?.videoDetails?.title || "" } : null;
+    };
+
+    // İki istek paralel: HLS (tüm kaliteler) + hemen başlayan 360p MP4. mpv-android HLS ana listesindeki tüm
+    // kalite/ses/altyazı listelerini açılışta indirdiği için HLS ile açılış 10-50 sn sürebilir; MP4 anında açılır.
+    const [hls, progressive] = await Promise.all([findHls(), findProgressive()]);
+    if (!hls && !progressive) return null;
+
+    const entry = {
+      videoId,
+      hlsUrl: hls?.hlsUrl || "",
+      progressiveUrl: progressive?.progressiveUrl || "",
+      streamUrl: hls?.hlsUrl || progressive?.progressiveUrl,
+      title: hls?.title || progressive?.title || document.title || "",
+      timestamp: Date.now()
+    };
+    ytAndroidHlsCache.set(videoId, entry);
+    return entry;
+  }
+
+  async function getSelectedAndroidPlayer() {
+    try {
+      const data = await chrome.storage.local.get("androidPlayer");
+      return data.androidPlayer || "mpv";
+    } catch {
+      return "mpv";
+    }
   }
 
   function isValidStreamHttpUrl(rawUrl) {
@@ -1022,16 +1054,26 @@
       const ytId = extractYouTubeVideoId(rawUrl);
       if (ytId) {
         const yt = await extractYouTubeHlsOnAndroid(rawUrl);
-        if (yt?.streamUrl) {
-          return {
-            provider: "youtube",
-            streamUrl: yt.streamUrl,
-            format: "HLS",
-            variantsByHeight: {},
-            title: yt.title || document.title || ""
-          };
-        }
-        return null;
+        if (!yt?.streamUrl) return null;
+        // VLC YouTube'un HLS ana listesini açamıyor (format tanınmıyor); VLC seçiliyse ya da HLS yoksa MP4.
+        const player = await getSelectedAndroidPlayer();
+        const useMp4 = Boolean(yt.progressiveUrl) && (!yt.hlsUrl || player === "vlc");
+        return {
+          provider: "youtube",
+          streamUrl: useMp4 ? yt.progressiveUrl : yt.hlsUrl,
+          format: useMp4 ? "MP4" : "HLS",
+          // HLS ile açılırken menüde hızlı başlayan 360p MP4 seçeneği de sunulur
+          variantsByHeight: !useMp4 && yt.progressiveUrl ? { 360: yt.progressiveUrl } : {},
+          title: yt.title || document.title || "",
+          menuNote:
+            player !== "vlc"
+              ? ""
+              : useMp4
+                ? yt.hlsUrl
+                  ? "VLC can't open YouTube's adaptive stream. Opening the 360p MP4:"
+                  : ""
+                : "VLC can't open YouTube's adaptive stream and no MP4 was offered for this video. Use mpv or MX Player (Open with…)."
+        };
       }
     }
 
@@ -1180,6 +1222,61 @@
 
   function sendMessageWithDeadline(message, ms = 8000) {
     return withDeadline(chrome.runtime.sendMessage(message), ms, null);
+  }
+
+  // Bazı sunucular HLS parçalarını resim CDN'lerinde sahte bir resim başlığıyla saklar (ör. TikTok görsel CDN'i:
+  // ".../xxx~tplv-...image"). Sitenin kendi oynatıcısı başlığı atlar; mpv / VLC / Android oynatıcıları açamaz.
+  const IMAGE_HOSTED_SEGMENT_RE = /tiktokcdn\.com\/|~tplv-/i;
+
+  function firstPlaylistUri(text, baseUrl) {
+    for (const line of String(text).split(/\r?\n/)) {
+      const l = line.trim();
+      if (!l || l.startsWith("#")) continue;
+      try {
+        return new URL(l, baseUrl).href;
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  }
+
+  /** Akışın segmentleri resim CDN'inde gizlenmiş mi? Master ise ilk variant'a bakar. Bilinmiyorsa false. */
+  async function hasImageHostedSegments(url) {
+    if (!isValidStreamHttpUrl(url) || /\.(mp4|webm|mkv)(\?|$)/i.test(url)) return false;
+    let playlist = await fetchPlaylistText(url, 3000);
+    if (!playlist?.text) return false;
+    if (/#EXT-X-STREAM-INF/i.test(playlist.text)) {
+      const variant = firstPlaylistUri(playlist.text, playlist.url);
+      if (!variant) return false;
+      playlist = await fetchPlaylistText(variant, 3000);
+      if (!playlist?.text) return false;
+    }
+    const segment = firstPlaylistUri(playlist.text, playlist.url);
+    return IMAGE_HOSTED_SEGMENT_RE.test(segment);
+  }
+
+  /**
+   * Akış yalnızca Referer ile mi açılıyor? Normal istek başarılı, Referer'sız istek başarısızsa true.
+   * Android oynatıcıları intent ile Referer alamadığı için bu akışlar orada 403 ile açılmaz.
+   */
+  async function requiresReferer(url) {
+    if (!isValidStreamHttpUrl(url)) return false;
+    const probe = async (policy) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      try {
+        const res = await fetch(url, { cache: "no-store", referrerPolicy: policy, signal: controller.signal });
+        controller.abort();
+        return res.ok;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    if (!(await probe("strict-origin-when-cross-origin"))) return false;
+    return !(await probe("no-referrer"));
   }
 
   function fetchPlaylistText(url, timeoutMs = 5000) {
@@ -1714,6 +1811,12 @@
       const altIntents = extras?.altIntents || {};
       // mpv-android (FFmpeg uzantı kontrolü) ve Just Player (ExoPlayer, intent MIME'ı video/*) bu akışı açamaz;
       // VLC ve MX Player içerikten tanır (emülatörde doğrulandı). MX Pro doğrulanmadı.
+      if (extras?.note) {
+        const note = document.createElement("div");
+        note.className = "mpv-menu-note";
+        note.textContent = extras.note;
+        menuItemsEl.appendChild(note);
+      }
       const recommendVlc =
         isAndroid && extras?.disguisedHls && !["vlc", "mx"].includes(extras?.androidPlayer) && altIntents.vlc;
       if (recommendVlc) {
@@ -1738,7 +1841,9 @@
       const list = Array.isArray(heights) && heights.length > 0 ? heights : [];
       for (const h of list) {
         const info = RESOLUTION_LABELS[h] || { label: `${h}p`, tag: h >= 1080 ? "HD" : "" };
-        options.push({ value: String(h), label: info.label, tag: info.tag });
+        // Android YouTube: 360p tek dosya MP4'tür, HLS'den çok daha hızlı başlar
+        const tag = isAndroid && mode === "youtube_hls" && h === 360 ? "FAST" : info.tag;
+        options.push({ value: String(h), label: info.label, tag });
       }
 
       if (!isAndroid && mode === "ytdl") {
@@ -1919,6 +2024,7 @@
               heights = Array.isArray(regRes.heights) ? regRes.heights : [];
               androidIntents = regRes.androidIntents || {};
               takeExtras(regRes);
+              if (extracted.menuNote) menuExtras.note = extracted.menuNote;
               streamUrls = regRes.streamUrls || { best: extracted.streamUrl };
               mode =
                 extracted.provider === "youtube"
@@ -1972,6 +2078,16 @@
         } finally {
           badgeEl.textContent = "mpv";
           triggerBtn.disabled = false;
+        }
+      }
+
+      if (!menuExtras.note && streamUrls?.best && mode !== "youtube_hls" && mode !== "ytdl") {
+        if (await withDeadline(hasImageHostedSegments(streamUrls.best), 7000, false)) {
+          menuExtras.note =
+            "This server hides the video inside images, so external players can't play it. Pick another server on the site (e.g. Vidstream).";
+        } else if (isAndroid && (await withDeadline(requiresReferer(streamUrls.best), 9000, false))) {
+          menuExtras.note =
+            "This server only answers requests with its player's Referer, which Android players can't get from the browser. It opens only if you added the Referer rule to mpv-android's mpv.conf or VLC's options once (see the README).";
         }
       }
 
@@ -2042,6 +2158,7 @@
 
     videoRegistry.set(video, meta);
     trackedVideos.add(video);
+    ensureLayoutTimer();
     updateWidgetPlacement(meta);
   }
 
@@ -2145,7 +2262,8 @@
 
   let rafScheduled = false;
   function scheduleLayoutUpdate() {
-    if (rafScheduled) return;
+    // Videosuz sayfa/frame'lerde (reklam iframe'leri, sohbet akışları) her DOM değişiminde iş yapma
+    if (rafScheduled || trackedVideos.size === 0) return;
     rafScheduled = true;
     requestAnimationFrame(() => {
       rafScheduled = false;
@@ -2165,27 +2283,41 @@
   }
 
   function scanForVideos(root = document) {
-    if (!root || typeof root.querySelectorAll !== "function") return;
-    for (const v of root.querySelectorAll("video")) {
+    if (!root || typeof root.getElementsByTagName !== "function") return;
+    for (const v of Array.from(root.getElementsByTagName("video"))) {
       attachWidgetToVideo(v);
     }
+  }
+
+  // Kopan videoları ve oynatıcı yerleşim değişikliklerini yakalayan periyodik kontrol; yalnızca izlenen video
+  // varken çalışır, son video da kalkınca durur.
+  let layoutTimer = null;
+  function ensureLayoutTimer() {
+    if (layoutTimer !== null) return;
+    layoutTimer = setInterval(() => {
+      if (trackedVideos.size === 0) {
+        clearInterval(layoutTimer);
+        layoutTimer = null;
+        return;
+      }
+      scheduleLayoutUpdate();
+    }, 1200);
   }
 
   scanForVideos(document);
 
   const observer = new MutationObserver((mutations) => {
-    let needsRescan = false;
     for (const m of mutations) {
       for (const node of m.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
         if (node.tagName === "VIDEO") {
           attachWidgetToVideo(node);
-        } else if (node.querySelectorAll) {
-          needsRescan = true;
+        } else if (node.firstElementChild) {
+          // Yalnızca eklenen alt ağacı tara (tüm belgeyi değil)
+          scanForVideos(node);
         }
       }
     }
-    if (needsRescan) scanForVideos(document);
     scheduleLayoutUpdate();
   });
 
@@ -2198,6 +2330,4 @@
   window.addEventListener("resize", scheduleLayoutUpdate, { passive: true });
   document.addEventListener("fullscreenchange", handleFullscreenChange, { passive: true });
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange, { passive: true });
-
-  setInterval(scheduleLayoutUpdate, 1200);
 })();

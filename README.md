@@ -113,6 +113,14 @@ Running `make` automatically:
    ```ini
    user-agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
    ```
+7. **Optional: anime sites whose servers require a Referer (e.g. anikoto):** Android players cannot receive the `Referer` header from the browser, so these servers answer them with `403`. If the **▶ mpv** menu shows the Referer warning, add this rule once in **`mpv-android → Settings → Advanced → Edit mpv.conf`**. It adds the Referer only to streams whose address has the `/<32 hex>/<32 hex>/` layout that these servers use:
+   ```ini
+   [megaplay-referer]
+   profile-cond=(path or ""):find("/"..("%x"):rep(32).."/"..("%x"):rep(32).."/")~=nil
+   profile-restore=copy
+   referrer=https://megaplay.buzz/
+   ```
+   **VLC alternative:** **VLC → Settings → Advanced → Custom libVLC options:** `--http-referrer=https://megaplay.buzz/`. VLC cannot limit this to one site, so every stream you open in VLC then carries that Referer. Subtitles of these sites cannot be passed to Android players: VLC treats a subtitle address given by the browser as a local file path, and mpv-android has no such option.
 
 ---
 
@@ -121,7 +129,7 @@ Running `make` automatically:
 - **Selecting Resolution:** Click **`▶ mpv`** on the bottom-right control bar -> pick **`1080p`**, **`720p`**, **`Auto (Best Quality)`**, or **`Audio Only`**. The browser video pauses automatically while `mpv` opens.
 - **Anime & Embed Sites:** Many embed players show a static poster/ad overlay before requesting the real `.m3u8` / `.mp4` manifest. Press Play once on the video so the stream loads, then click **`▶ mpv`**.
 - **Choosing mpv or VLC:** Open the toolbar popup and pick **Player** (desktop) or **Android player**. On desktop Firefox, press **Allow desktop player** once to grant the native-messaging permission.
-- **Toolbar Popup:** Click the extension icon in the browser toolbar to check connection status (`mpv Ready` / `Android Ready`) or toggle `Auto-open videos` (off by default).
+- **Toolbar Popup:** Click the extension icon in the browser toolbar to check connection status (`mpv Ready` / `Android Ready`) or toggle `Auto-open videos` (off by default). Under `Ignored stream domains` you can list hosts whose streams should never be captured (common ad servers are always ignored).
 
 ---
 
@@ -131,9 +139,12 @@ Running `make` automatically:
 2. **Android Intent HTTP Header Limitation:** Official `mpv-android` (`is.xyz.mpv`) does not yet parse custom `Referer` or `User-Agent` headers from Android `ACTION_VIEW` Intents (`TODO` in upstream `MPVActivity.kt`). **YouTube, Mail.ru, Sibnet, Dailymotion, Tau, and Google Drive** play directly on Android out-of-the-box, and **VK / OK.ru** work once a browser `user-agent` is set in `mpv.conf` (see Step 6 above). Strict `Referer`-locked embed CDNs (e.g., Alucard / Vidmoly) may still return `403` on Android (all of them work seamlessly on macOS where full headers are passed).
 3. **mpv-android and extensionless HLS:** FFmpeg 7.1+ (used by current mpv-android builds) refuses to detect HLS when the URL has no `.m3u8` extension *and* the server sends a generic MIME type (`Not detecting m3u8/hls with non standard extension and non standard mime type`). On desktop the native host fixes this with `--demuxer-lavf-format=hls`, but Android intents cannot pass mpv options — so for such streams the menu shows **Open in VLC (recommended)**; VLC detects HLS by content. **Just Player** (ExoPlayer) has the same limitation: the browser can only hand it `type=video/*`, so it treats the playlist as a plain file (`UnrecognizedInputFormatException`); the menu recommends VLC whenever the selected Android player is not VLC, and **Open with…** uses the HLS MIME type for such streams so Android only lists apps that can actually play them. **MX Player** (tested with 3.4.3) detects HLS by content and plays these streams, so no VLC hint is shown when MX is selected. On first launch MX asks for file access before it plays anything, network streams included.
 4. **Google Drive embeds:** Drive's own `videoplayback` URLs are tied to a session cookie (`403` in an external player) and are split audio/video MSE tracks. For a public Drive file the extension opens the file's cookieless original instead (`drive.usercontent.google.com/download?id=…&confirm=t`, full original quality, seekable). Tested: desktop Firefox → native host → mpv from the button inside the Drive player; on Firefox Android the extension resolved the same URL (popup → Share → Just Player), and VLC, Just Player and mpv-android each played that URL. Private files, or files that hit Drive's download quota, return an HTML page at that URL instead of video.
-5. **Encrypted subtitles:** Some sites (e.g. openani.me) serve subtitles in an encrypted container behind a signed per-session token and decode them in the page. The extension does not break that protection, so the video opens in the player without those subtitles.
-6. **Service-worker / encrypted MSE players** (e.g. Abyss) never expose a playable URL to the page and are not supported; pick another source on the site.
-7. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` launches only allow-listed players (`mpv`, `vlc`), accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and a `--` argument separator, rejects CRLF header injection, and validates caller `allowed_origins`.
+5. **YouTube on Android:** YouTube's HLS stream lists 17 qualities plus separate audio and subtitle playlists. mpv-android (FFmpeg) downloads all of them before it starts, which can take 10–50 seconds; MX Player starts in a few seconds. The menu therefore also offers **360p · FAST**, a single MP4 file that starts at once in every player. VLC cannot open YouTube's HLS at all, so with VLC selected the MP4 is used. YouTube sometimes answers with a "confirm you're not a bot" check; then no external player can get the video.
+6. **Subtitles (desktop):** External subtitle files that the site's player loads (WebVTT, SRT, ASS) are passed to the player, preferring your browser language, then English (newest first within a language; a previous episode's subtitles are dropped when the episode changes). mpv loads them directly with the same Referer; for VLC the preferred one is downloaded first. Android players cannot receive them.
+7. **Servers that hide video in images / require a Referer:** Some anime servers store video segments inside image files on image CDNs; external players cannot play these, and the menu says so (pick another server on the site). Servers that only answer requests carrying their own player's Referer work on desktop; on Android they need the one-time mpv.conf / VLC rule from Android setup step 7, and the menu shows a warning.
+8. **Encrypted subtitles:** Some sites (e.g. openani.me) serve subtitles in an encrypted container behind a signed per-session token and decode them in the page. The extension does not break that protection, so the video opens in the player without those subtitles.
+9. **Service-worker / encrypted MSE players** (e.g. Abyss) never expose a playable URL to the page and are not supported; pick another source on the site.
+10. **Privacy & Hardened Execution:** Browser cookies and `Authorization` headers are never exfiltrated. `mpv_host.py` launches only allow-listed players (`mpv`, `vlc`), accepts only `http://` and `https://` URLs, spawns processes with `shell=False` and a `--` argument separator, rejects CRLF header injection, and validates caller `allowed_origins`.
 
 ---
 

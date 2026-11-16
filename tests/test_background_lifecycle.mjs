@@ -594,4 +594,81 @@ await sendMessageToBg(
 assert.ok(!JSON.stringify(lastNativePayload || {}).includes("drive.usercontent"), "main frame must not open the Drive file");
 console.log("  [PASS] Google Drive: inner viewer frame uses the parent's cookieless Drive file; unrelated frames do not");
 
+// Harici altyazılar: oynatıcının çektiği .vtt / /subtitles/ istekleri yakalanır; açılırken yalnızca akışın
+// frame'indekiler, tercih edilen dil başta olacak şekilde host'a gönderilir. Önizleme küçük resimleri (thumbnails.vtt) atlanır.
+mockTabs.set(909, { id: 909, url: "https://anime.example/watch/ep-1", title: "Ep 1" });
+const subHeaders = [{ name: "Referer", value: "https://player.example/" }];
+await listeners.onSendHeaders[0]({ requestId: "s0", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://cdn.example/anime/a/master.m3u8?token=t", requestHeaders: subHeaders });
+await listeners.onSendHeaders[0]({ requestId: "s1", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://subs.example/anime/a/subtitles/ara-9.vtt", requestHeaders: subHeaders });
+await listeners.onSendHeaders[0]({ requestId: "s2", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://subs.example/anime/a/subtitles/track_0_en", requestHeaders: subHeaders });
+await listeners.onSendHeaders[0]({ requestId: "s3", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://img.example/anime/a/preview/thumbnails.vtt", requestHeaders: subHeaders });
+await listeners.onSendHeaders[0]({ requestId: "s4", tabId: 909, frameId: 0, type: "xmlhttprequest", url: "https://other.example/subtitles/eng-1.vtt", requestHeaders: subHeaders });
+simulatePlatformOs = "mac";
+lastNativePayload = null;
+await sendMessageToBg(
+  { type: "OPEN_FROM_VIDEO_OVERLAY", currentSrc: "blob:https://player.example/x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl: "https://anime.example/watch/ep-1", preferredResolution: "best" },
+  "abcdefghijklmnopabcdefghijklmnop",
+  { tab: { id: 909, url: "https://anime.example/watch/ep-1", title: "Ep 1" }, frameId: 3, url: "https://player.example/embed/1" }
+);
+assert.ok(lastNativePayload, "native host should be called");
+assert.equal(lastNativePayload.payload.url, "https://cdn.example/anime/a/master.m3u8?token=t");
+assert.deepEqual(
+  lastNativePayload.payload.subtitles.map((x) => x.url),
+  ["https://subs.example/anime/a/subtitles/track_0_en", "https://subs.example/anime/a/subtitles/ara-9.vtt"],
+  JSON.stringify(lastNativePayload.payload.subtitles)
+);
+console.log("  [PASS] Subtitles captured from the player's frame (thumbnails skipped) and sent to the host, English first");
+
+// Bölüm değişimi: (a) aynı frame'de yeni bölüm altyazısı eskisinin önüne geçer, (b) oynatıcı iframe'i yeni belgeye
+// geçince o frame'in eski altyazıları silinir, (c) SPA ile sayfa adresi değişince altyazılar da sıfırlanır.
+const openTab909 = async (pageUrl) => {
+  lastNativePayload = null;
+  await sendMessageToBg(
+    { type: "OPEN_FROM_VIDEO_OVERLAY", currentSrc: "blob:https://player.example/x", src: "", sources: [], videoCountInFrame: 1, actionTimestamp: Date.now(), pageUrl, preferredResolution: "best" },
+    "abcdefghijklmnopabcdefghijklmnop",
+    { tab: { id: 909, url: pageUrl, title: "Ep" }, frameId: 3, url: "https://player.example/embed/1" }
+  );
+  return (lastNativePayload?.payload?.subtitles || []).map((x) => x.url);
+};
+await listeners.onSendHeaders[0]({ requestId: "s5", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://subs.example/anime/b/subtitles/eng-2.vtt", requestHeaders: subHeaders });
+assert.equal((await openTab909("https://anime.example/watch/ep-1"))[0], "https://subs.example/anime/b/subtitles/eng-2.vtt", "newest English subtitle must come first");
+
+await listeners.onSendHeaders[0]({ requestId: "f1", tabId: 909, frameId: 3, type: "sub_frame", url: "https://player.example/embed/2", requestHeaders: [] });
+await listeners.onSendHeaders[0]({ requestId: "s6", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://subs.example/anime/c/subtitles/eng-3.vtt", requestHeaders: subHeaders });
+assert.deepEqual(await openTab909("https://anime.example/watch/ep-1"), ["https://subs.example/anime/c/subtitles/eng-3.vtt"], "iframe navigation drops that frame's old subtitles");
+
+// SPA geçişi (onUpdated kaçırıldı): yeni bölümün altyazısı akıştan ÖNCE gelir ve sıfırlamada silinmemeli
+mockTabs.set(909, { id: 909, url: "https://anime.example/watch/ep-2", title: "Ep 2" });
+await listeners.onSendHeaders[0]({ requestId: "s7", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://subs.example/anime/d/subtitles/eng-4.vtt", requestHeaders: subHeaders });
+await listeners.onSendHeaders[0]({ requestId: "s8", tabId: 909, frameId: 3, type: "xmlhttprequest", url: "https://cdn.example/anime/d/master.m3u8?token=t", requestHeaders: subHeaders });
+assert.deepEqual(await openTab909("https://anime.example/watch/ep-2"), ["https://subs.example/anime/d/subtitles/eng-4.vtt"], "SPA page change resets old subtitles but keeps the new episode's");
+console.log("  [PASS] Episode change: newest subtitle first, iframe navigation and SPA page change drop stale subtitles");
+
+// Performans: akış olmayan sıradan XHR'ler storage.session'a hiç yazmamalı (pending tablosu bellekte)
+const realSessionSet = globalThis.chrome.storage.session.set;
+let sessionWrites = 0;
+globalThis.chrome.storage.session.set = async (obj) => {
+  sessionWrites++;
+  return realSessionSet(obj);
+};
+for (let i = 0; i < 20; i++) {
+  const d = { requestId: `x${i}`, tabId: 909, frameId: 0, type: "xmlhttprequest", url: `https://api.example/feed?page=${i}`, requestHeaders: [] };
+  await listeners.onSendHeaders[0](d);
+  await listeners.onHeadersReceived[0]({ ...d, statusCode: 200, responseHeaders: [{ name: "Content-Type", value: "application/json" }] });
+}
+globalThis.chrome.storage.session.set = realSessionSet;
+assert.equal(sessionWrites, 0, `plain XHRs caused ${sessionWrites} storage.session writes`);
+assert.ok(!("pendingRequests" in sessionStore), "pendingRequests must not live in storage.session");
+console.log("  [PASS] Plain XHR traffic causes zero storage.session writes");
+
+// Kullanıcı engel listesi: temizlenir (şema/yol/*./büyük harf), geçersizler atılır, varsayılan reklam listesi korunur
+const blk = await sendMessageToBg({ type: "SET_SETTINGS", extraBlockedDomains: ["https://Ads.Example.com/path", "*.tracker.example", "not a domain", "ads.example.com"] });
+assert.deepEqual(blk.settings.extraBlockedDomains, ["ads.example.com", "tracker.example"]);
+assert.ok(blk.settings.blockedDomains.includes("doubleclick.net"), "default ad domains stay blocked");
+mockTabs.set(910, { id: 910, url: "https://site.example/v", title: "V" });
+await listeners.onSendHeaders[0]({ requestId: "b1", tabId: 910, frameId: 0, type: "xmlhttprequest", url: "https://cdn.tracker.example/v/master.m3u8", requestHeaders: [] });
+assert.equal((sessionStore.tab_910?.streams || []).length, 0, "streams from a user-blocked domain must not be captured");
+await sendMessageToBg({ type: "SET_SETTINGS", extraBlockedDomains: [] });
+console.log("  [PASS] User blocklist is sanitized, merged with the default ad list and applied to capture");
+
 console.log("All background lifecycle & concurrency tests passed!");
