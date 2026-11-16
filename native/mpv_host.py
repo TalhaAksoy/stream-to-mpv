@@ -32,7 +32,7 @@ CHROME_EXT_ORIGIN_REGEX = re.compile(r"^chrome-extension://[a-p]{32}/?$")
 GECKO_EXT_ID = "stream-to-mpv@talha.dev"
 
 # Host sürümü (eklenti eski bir ~/mpv_host kopyasını ping ile tespit edebilsin diye)
-HOST_VERSION = "1.2.1"
+HOST_VERSION = "1.2.2"
 
 # İzin verilen harici oynatıcılar (yol asla mesajdan alınmaz)
 SUPPORTED_PLAYERS = ("mpv", "vlc")
